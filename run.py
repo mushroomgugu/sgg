@@ -55,7 +55,7 @@ class MyLayer(nn.Module):
         self.reset_parameters()
 
     def forward(self, x, d, s):
-        return self.w_1.mm(x.t()) + x.mm(self.w_2).mm(d.t()) + x.mm(self.w_3).mm(F.tanh(s.t())) + self.bias
+        return self.w_1.mm(x.t()) + x.mm(self.w_2).mm(d.t()) - x.mm(self.w_3).mm(F.tanh(s.t())) + self.bias
 
     def reset_parameters(self):
         stdv_1 = 1. / math.sqrt(self.w_1.size(0))
