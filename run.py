@@ -285,9 +285,12 @@ if __name__ == '__main__':
                 box_reward = float(words[2])
                 label = int(words[3])
                 eig_vec = []
-                for i in range(5, 4105):
+                for i in range(5, 4101):
                     num = float(words[i])
                     eig_vec.append(num)
+                for i in range(-6, -2):
+                    x1 = float(words[i])
+                    eig_vec.append(x1)
 
                 if last_pic != pic_id:
                     num = len(eig_vec_all)
@@ -337,9 +340,12 @@ if __name__ == '__main__':
             box_reward = float(words[2])
             label = int(words[3])
             eig_vec = np.zeros((1, 4100), dtype=float)
-            for i in range(5, 4105):
+            for i in range(5, 4101):
                 num = float(words[i])
-                eig_vec[0, i - 5] = num
+                eig_vec.append(num)
+            for i in range(-6, -2):
+                x1 = float(words[i])
+                eig_vec.append(x1)
 
             if last_pic != pic_id:
                 num = len(eig_vec_all)
