@@ -256,7 +256,7 @@ class DQN:
 def get_score(c, c_true):
     up = 0.0
     down = 0.0
-    for i in range(np.shape(c)[0]):
+    for i in range(np.shape(c)[1]):
         if c[0, i] == c_true[i] and c[0, i] == 1:
             up += 1.0
         elif c_true[i] == 1 or c[0, i] == 1:
@@ -301,7 +301,7 @@ if __name__ == '__main__':
                         logging.info("aciton: " + str(action))
                         c_last = c.copy()
                         c[0, action] = 1
-                        if i != 33:
+                        if i != 34:
                             reward = last_score - get_score(c, c_true)
                             last_score = get_score(c, c_true)
                         else:
@@ -361,8 +361,8 @@ if __name__ == '__main__':
                 s_max = - sys.float_info.max
                 max_i = 0
                 print(Q)
-                for i in range(35):
-                    s_i = Q[0, i] + (1 - GAMMA) * (np.sum(Q[:, i:-1], axis=1)) - GAMMA * Q[:, -1]
+                for i in range(1, 35):
+                    s_i = Q[0, i] + (1 - GAMMA) * (np.sum(Q[:, i+1:-1], axis=1)) - GAMMA * Q[:, -1]
                     if s_i > s_max:
                         max_i = i
                         s_max = s_i
