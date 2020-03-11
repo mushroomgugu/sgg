@@ -355,7 +355,7 @@ if __name__ == '__main__':
                 dqn.set_data(eig_mat)
                 last_score = 0
                 Q = np.zeros((1, 35), dtype=float)
-                c_all = np.zeros((34, num))
+                c_all = np.zeros((35, num))
                 for i in range(35):
                     action = dqn.choose_action(c)
                     q = dqn.get_q(c, action)
