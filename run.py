@@ -259,6 +259,7 @@ def get_score(c, c_true):
     for i in range(np.shape(c)[1]):
         if c[0, i] == c_true[i] and c[0, i] == 1:
             up += 1.0
+            down += 1.0
         elif c_true[i] == 1 or c[0, i] == 1:
             down += 1.0
     if down == 0:
