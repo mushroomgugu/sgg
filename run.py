@@ -270,7 +270,7 @@ def get_score(c, c_true):
 if __name__ == '__main__':
 
     try:
-        for times in range(20):
+        for times in range(30):
             path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_0-1000.txt'
             f = open(path, mode='r')
             last_pic = 0
@@ -339,7 +339,7 @@ if __name__ == '__main__':
             box_id = int(words[1])
             box_reward = float(words[2])
             label = int(words[3])
-            eig_vec = np.zeros((1, 4100), dtype=float)
+            eig_vec = []
             for i in range(5, 4101):
                 num = float(words[i])
                 eig_vec.append(num)
@@ -347,12 +347,10 @@ if __name__ == '__main__':
                 x1 = float(words[i])
                 eig_vec.append(x1)
 
-            if last_pic != pic_id:
+            if last_pic < pic_id:
                 num = len(eig_vec_all)
                 c = np.zeros((1, num))
-                eig_mat = np.zeros((num, 4100), dtype=float)
-                for i in range(num):
-                    eig_mat[i:i + 1, :] = eig_vec_all[i]
+                eig_mat = np.array(eig_vec_all)
                 dqn.set_data(eig_mat)
                 last_score = 0
                 Q = np.zeros((1, 35), dtype=float)
