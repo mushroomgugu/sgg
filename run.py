@@ -3,7 +3,7 @@
 # @Time    : 2020/3/8 2:42 下午
 # @Author  : huangscar
 # @Site    : 
-# @File    : DQN_t2.py
+# @File    : run.py
 # @Software: PyCharm
 
 import sys
@@ -22,8 +22,9 @@ BATCH_SIZE = 128
 LR = 0.01
 GAMMA = 0.90
 EPISILO = 0.9
-MEMORY_CAPACITY = 3300
+MEMORY_CAPACITY = 3400
 Q_NETWORK_ITERATION = 100
+
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%m/%d/%Y %H:%M:%S %p"
@@ -68,12 +69,12 @@ class MyLayer(nn.Module):
 class QNetwork(nn.Module):
     def __init__(self):
         super(QNetwork, self).__init__()
-        self.layer1 = nn.Linear(4, 100)
+        self.layer1 = nn.Linear(4, 40)
         self.layer1.weight.data.normal_(-0.0001, 0.0001)
         self.layer1.bias.data.normal_(-0.01, 0.01)
-        self.layer2 = nn.Linear(4196, 5000)
-        self.layer3 = nn.Linear(5000, 1, False)
-        self.layer4 = MyLayer(4196, 1)
+        self.layer2 = nn.Linear(4136, 1024)
+        self.layer3 = nn.Linear(1024, 1, False)
+        self.layer4 = MyLayer(4136, 1)
 
 
     def forward(self, x, c, a):
@@ -82,19 +83,19 @@ class QNetwork(nn.Module):
         num = np.shape(c)[1]
         # print(num)
         if torch.cuda.is_available():
-            lay1_x = torch.zeros(num, 4196).cuda()
+            lay1_x = torch.zeros(num, 4136).cuda()
             w = torch.zeros(1, num).cuda()
-            chosen = torch.zeros(num, 4196).cuda()
+            chosen = torch.zeros(num, 4136).cuda()
             chosen_w = torch.zeros(1, num).cuda()
             chosen_num = 0
-            action_ = torch.zeros(0, 4196).cuda()
+            action_ = torch.zeros(0, 4136).cuda()
         else:
-            lay1_x = torch.zeros(num, 4196)
+            lay1_x = torch.zeros(num, 4136)
             w = torch.zeros(1, num)
-            chosen = torch.zeros(num, 4196)
+            chosen = torch.zeros(num, 4136)
             chosen_w = torch.zeros(1, num)
             chosen_num = 0
-            action_ = torch.zeros(0, 4196)
+            action_ = torch.zeros(0, 4136)
         for i in range(num):
             xy = x[i:i+1, 4096:4100]
             # xy = torch.from_numpy(xy)
@@ -135,9 +136,9 @@ class QNetwork(nn.Module):
             s = c_w_softmax.mm(chosen_true)
         else:
             if torch.cuda.is_available():
-                s = torch.zeros(1, 4196).cuda()
+                s = torch.zeros(1, 4136).cuda()
             else:
-                s = torch.zeros(1, 4196)
+                s = torch.zeros(1, 4136)
         output = self.layer4(action_, d, s)
         return output
 
@@ -159,6 +160,12 @@ class DQN:
         self.memory_counter = 0
         self.box_num = 1
 
+        # self.store_num = 0
+        # self.all_box_arr = []
+        self.all_box_list = []
+
+        self.memory = np.zeros((MEMORY_CAPACITY, 64 * 2 + 3))
+
         self.loss_arr = []
         # why the NUM_STATE*2 +2
         # When we store the memory, we put the state, action, reward and next_state in the memory
@@ -166,10 +173,16 @@ class DQN:
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
         self.loss_func = nn.MSELoss()
 
-    def set_data(self, all_box):
+    def set_data(self, all_box, pic_id):
         self.box_num = np.shape(all_box)[0]
-        self.memory = np.zeros((MEMORY_CAPACITY, self.box_num*2 + 2))
         self.all_box = all_box
+        num = len(self.all_box_list)
+        print(num)
+        if pic_id > num-1:
+            for i in range(pic_id - num + 1):
+                self.all_box_list.append(0)
+        if type(self.all_box_list[pic_id]) == int:
+            self.all_box_list[pic_id] = all_box
         # self.c = np.zeros((1, self.box_num))
 
     def choose_action(self, c):
@@ -220,14 +233,18 @@ class DQN:
         # action = action_n
         return action_n
 
-    def store_transition(self, state, action, reward, next_state):
+    def store_transition(self, state, action, reward, next_state, pic_id):
+        pic_id_r = np.zeros((1, 1))
+        pic_id_r[0, 0] = pic_id
         a_r = np.zeros((1, 2))
         a_r[0, 0] = action
         a_r[0, 1] = reward
-        transition = np.hstack((state, a_r, next_state))
+        transition = np.hstack((pic_id_r, state, a_r, next_state))
+        # print(pic_id_r.shape)
         index = self.memory_counter % MEMORY_CAPACITY
         self.memory[index, :] = transition
         self.memory_counter += 1
+
 
     def learn(self):
 
@@ -237,21 +254,23 @@ class DQN:
 
         sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
         batch_memory = self.memory[sample_index, :]
-        batch_state = batch_memory[:, :self.box_num]
-        batch_action = batch_memory[:, self.box_num:self.box_num + 1]
-        batch_reward = batch_memory[:, self.box_num + 1:self.box_num + 2]
-        batch_next_state = batch_memory[:, -self.box_num:]
+        batch_pic_id = batch_memory[:, 0:1]
+        batch_state = batch_memory[:, 1:65]
+        batch_action = batch_memory[:, 65:66]
+        batch_reward = batch_memory[:, 66:67]
+        batch_next_state = batch_memory[:, -64:]
         self.learn_step_counter += 1
 
         # q_eval
         for k in range(np.shape(batch_memory)[0]):
-            q_eval = self.eval_net(self.all_box, batch_state[k:k+1, :], batch_action[k:k+1, 0])
+            all_box = self.all_box_list[batch_pic_id[k, 0]]
+            q_eval = self.eval_net(all_box, batch_state[k:k+1, :], batch_action[k:k+1, 0])
             q_next_max = - sys.float_info.max
             for j in range(self.box_num):
                 if batch_next_state[k:k+1, j] == 0:
                     # print('next')
                     # print(j)
-                    q_next = self.target_net(self.all_box, batch_next_state[k:k+1, :], j)
+                    q_next = self.target_net(all_box, batch_next_state[k:k+1, :], j)
                     # print(q_next.detach().numpy())
                     if torch.cuda.is_available():
                         if q_next_max < q_next.cpu().detach().numpy()[0, 0]:
@@ -314,7 +333,6 @@ if __name__ == '__main__':
             if times > 0:
                 logging.info("================================")
             path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
-            # path = '/Users/huangscar/desktop/sg/old/vg_train_sgdet_0-1000.txt'
             f = open(path, mode='r')
             last_pic = 1000
             # last_pic = 0
@@ -344,10 +362,10 @@ if __name__ == '__main__':
                         logging.info("true num: " + str(true_num))
                         pic_num += 1
                         num = len(eig_vec_all)
-                        c = np.zeros((1, num))
+                        c = np.zeros((1, 64))
                         eig_mat = np.array(eig_vec_all)
                         # print(eig_mat)
-                        dqn.set_data(eig_mat)
+                        dqn.set_data(eig_mat, last_pic)
                         last_score = 0
                         for i in range(35 - 1):
                             action = dqn.choose_action(c)
@@ -365,7 +383,7 @@ if __name__ == '__main__':
                             else:
                                 score, finish = get_score(c, c_true)
                                 reward = score
-                            dqn.store_transition(c_last, action, reward, c)
+                            dqn.store_transition(c_last, action, reward, c, last_pic)
                         if times > 0:
                             dqn.learn()
                             dqn.print_loss()
@@ -389,9 +407,7 @@ if __name__ == '__main__':
                     c_true.append(box_reward)
             f.close()
         # 测试代码
-        # path = '/home/wby/wby/wby_outputs/test/sgdet_test/test_img_predinfo_txt_noconstraint/vg_test_sgdet_0-1000.txt'
         path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
-        # path = '/Users/huangscar/desktop/sg/old/vg_train_sgdet_0-1000.txt'
         f = open(path, mode='r')
         last_pic = 1000
         eig_vec_all = []
@@ -476,5 +492,4 @@ if __name__ == '__main__':
         log.addHandler(file_handler)
         # 将堆栈中的信息输入到log上
         log.debug(traceback.format_exc())
-
 
