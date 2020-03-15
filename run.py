@@ -15,21 +15,23 @@ from torch import FloatTensor
 import math
 import logging
 import traceback
+import os
+import random
 Tensor = FloatTensor
 
 
-BATCH_SIZE = 128
+BATCH_SIZE = 8
 LR = 0.01
 GAMMA = 0.90
 EPISILO = 0.9
-MEMORY_CAPACITY = 3400
+MEMORY_CAPACITY = 68
 Q_NETWORK_ITERATION = 100
 
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%m/%d/%Y %H:%M:%S %p"
 
-logging.basicConfig(filename='my2.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
+logging.basicConfig(filename='my.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
 
 class MyLayer(nn.Module):
     def __init__(self, in_features, out_features, bias = True):
@@ -177,7 +179,7 @@ class DQN:
         self.box_num = np.shape(all_box)[0]
         self.all_box = all_box
         num = len(self.all_box_list)
-        print(num)
+        # print(num)
         if pic_id > num-1:
             for i in range(pic_id - num + 1):
                 self.all_box_list.append(0)
@@ -252,6 +254,7 @@ class DQN:
         if self.learn_step_counter % Q_NETWORK_ITERATION == 0:
             self.target_net.load_state_dict(self.eval_net.state_dict())
 
+        print(self.memory)
         sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
         batch_memory = self.memory[sample_index, :]
         batch_pic_id = batch_memory[:, 0:1]
@@ -263,7 +266,10 @@ class DQN:
 
         # q_eval
         for k in range(np.shape(batch_memory)[0]):
-            all_box = self.all_box_list[batch_pic_id[k, 0]]
+            # print(batch_pic_id[k, 0])
+            # print(int(batch_pic_id[k, 0][0, 0]))
+
+            all_box = self.all_box_list[int(batch_pic_id[k, 0])]
             q_eval = self.eval_net(all_box, batch_state[k:k+1, :], batch_action[k:k+1, 0])
             q_next_max = - sys.float_info.max
             for j in range(self.box_num):
@@ -304,7 +310,24 @@ class DQN:
 
     def print_loss(self):
         print(self.loss_arr)
+        finish = True
+        for loss in self.loss_arr:
+            if torch.cuda.is_available():
+                if loss.cpu().detach().numpy() > 0.01:
+                    finish = False
+            else:
+                print(loss)
+                print(loss.detach())
+                print(loss.detach().numpy())
+                if loss.detach().numpy() > 0.01:
+                    finish = False
         self.loss_arr.clear()
+        return finish
+
+    def save_model(self):
+        torch.save(self.eval_net, 'eval_net.pkl')
+        torch.save(self.target_net, 'target_net.pkl')
+
 
 def get_score(c, c_true):
     up = 0.0
@@ -329,16 +352,22 @@ def get_score(c, c_true):
 if __name__ == '__main__':
 
     try:
-        for times in range(30):
+        root_dir = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint'
+        dqn = DQN()
+        file_list = os.listdir(root_dir)
+        times = 0
+        finish = False
+        while True:
             if times > 0:
                 logging.info("================================")
-            path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
+            # path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
+            rand_txt = random.choice(file_list)
+            path = root_dir + '/' + rand_txt
             f = open(path, mode='r')
-            last_pic = 1000
+            last_pic = -1
             # last_pic = 0
             eig_vec_all = []
             c_true = []
-            dqn = DQN()
             step = 0
             true_num = 0
             pic_num = 0
@@ -357,8 +386,11 @@ if __name__ == '__main__':
                     x1 = float(words[i])
                     eig_vec.append(x1)
 
+                if last_pic == -1:
+                    last_pic = pic_id
+
                 if last_pic != pic_id:
-                    if true_num >= 5:
+                    if true_num >= 1:
                         logging.info("true num: " + str(true_num))
                         pic_num += 1
                         num = len(eig_vec_all)
@@ -386,102 +418,110 @@ if __name__ == '__main__':
                             dqn.store_transition(c_last, action, reward, c, last_pic)
                         if times > 0:
                             dqn.learn()
-                            dqn.print_loss()
+                            finish = dqn.print_loss()
+                            if finish:
+                                break
                     eig_vec_all.clear()
                     c_true.clear()
                     true_num = 0
                     # print(last_pic)
                     logging.info("pic: " + str(last_pic))
                     logging.info("---------------------------")
-                    if pic_num >= 100:
-                        break
                     eig_vec_all.append(eig_vec)
                     c_true.append(box_reward)
                     last_pic = pic_id
                     if box_reward == 1:
                         true_num += 1
                 else:
+                    # times += 1
                     if box_reward == 1:
                         true_num += 1
                     eig_vec_all.append(eig_vec)
                     c_true.append(box_reward)
             f.close()
+            times += 1
+            if finish:
+                break
+        dqn.save_model()
         # 测试代码
-        path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
-        f = open(path, mode='r')
-        last_pic = 1000
-        eig_vec_all = []
-        c_true = []
-        dqn = DQN()
-        step = 0
-        reward_all = []
-        pic_num = 0
-        true_num = 0
-        for line in f:
-            words = line.split(' ')
-            pic_id = int(words[0])
-            box_id = int(words[1])
-            box_reward = float(words[2])
-            box_reward = int(box_reward)
-            label = int(words[3])
-            eig_vec = []
-            for i in range(5, 4101):
-                num = float(words[i])
-                eig_vec.append(num)
-            for i in range(-6, -2):
-                x1 = float(words[i])
-                eig_vec.append(x1)
+        # path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
+        times = 0
+        for file in file_list:
+            times += 1
+            path = root_dir + '/' + file
+            f = open(path, mode='r')
+            last_pic = -1
+            eig_vec_all = []
+            c_true = []
+            step = 0
+            reward_all = []
+            pic_num = 0
+            true_num = 0
+            for line in f:
+                words = line.split(' ')
+                pic_id = int(words[0])
+                box_id = int(words[1])
+                box_reward = float(words[2])
+                box_reward = int(box_reward)
+                label = int(words[3])
+                eig_vec = []
+                for i in range(5, 4101):
+                    num = float(words[i])
+                    eig_vec.append(num)
+                for i in range(-6, -2):
+                    x1 = float(words[i])
+                    eig_vec.append(x1)
+                if last_pic == -1:
+                    last_pic = pic_id
+                if last_pic < pic_id:
+                    if true_num >= 1:
+                        pic_num += 1
+                        num = len(eig_vec_all)
+                        c = np.zeros((1, num))
+                        eig_mat = np.array(eig_vec_all)
+                        dqn.set_data(eig_mat, last_pic)
+                        last_score = 0
+                        Q = np.zeros((1, 35), dtype=float)
+                        c_all = np.zeros((34, num))
+                        for i in range(35):
+                            action = dqn.choose_action_test(c)
+                            q = dqn.get_q(c, action)
+                            c_last = c
+                            c[0, action] = 1
+                            c_all[i + 1:i + 2, :] = c
+                            Q[0, i] = q
+                        s_max = - sys.float_info.max
+                        max_i = 0
+                        print(Q)
+                        for i in range(1, 35):
+                            s_i = Q[0, i] + (1 - GAMMA) * (np.sum(Q[:, i + 1:-1], axis=1)) - GAMMA * Q[:, -1]
+                            if s_i > s_max:
+                                max_i = i
+                                s_max = s_i
+                                print(s_max)
 
-            if last_pic < pic_id:
-                if true_num >= 5:
-                    pic_num += 1
-                    num = len(eig_vec_all)
-                    c = np.zeros((1, num))
-                    eig_mat = np.array(eig_vec_all)
-                    dqn.set_data(eig_mat)
-                    last_score = 0
-                    Q = np.zeros((1, 35), dtype=float)
-                    c_all = np.zeros((34, num))
-                    for i in range(35):
-                        action = dqn.choose_action_test(c)
-                        q = dqn.get_q(c, action)
-                        c_last = c
-                        c[0, action] = 1
-                        c_all[i + 1:i + 2, :] = c
-                        Q[0, i] = q
-                    s_max = - sys.float_info.max
-                    max_i = 0
-                    print(Q)
-                    for i in range(1, 35):
-                        s_i = Q[0, i] + (1 - GAMMA) * (np.sum(Q[:, i + 1:-1], axis=1)) - GAMMA * Q[:, -1]
-                        if s_i > s_max:
-                            max_i = i
-                            s_max = s_i
-                            print(s_max)
+                        c_max = c_all[max_i:max_i + 1, :]
+                        print(c_max)
+                        print(c_true)
+                        reward = get_score(c_max, c_true)
+                        reward_all.append(reward)
+                        print(reward)
+                        logging.info("reward: " + str(reward))
+                    eig_vec_all.clear()
+                    c_true.clear()
+                    true_num = 0
+                    if box_reward == 1:
+                        true_num += 1
+                    eig_vec_all.append(eig_vec)
+                    c_true.append(box_reward)
+                    last_pic = pic_id
 
-                    c_max = c_all[max_i:max_i + 1, :]
-                    print(c_max)
-                    print(c_true)
-                    reward = get_score(c_max, c_true)
-                    reward_all.append(reward)
-                    print(reward)
-                    logging.info("reward: " + str(reward))
-                eig_vec_all.clear()
-                c_true.clear()
-                true_num = 0
-                if box_reward == 1:
-                    true_num += 1
-                if pic_num >= 100:
-                    break
-                eig_vec_all.append(eig_vec)
-                c_true.append(box_reward)
-                last_pic = pic_id
-
-            else:
-                if box_reward == 1:
-                    true_num += 1
-                eig_vec_all.append(eig_vec)
-                c_true.append(box_reward)
+                else:
+                    if box_reward == 1:
+                        true_num += 1
+                    eig_vec_all.append(eig_vec)
+                    c_true.append(box_reward)
+            f.close()
     except Exception as e:
         log = logging.getLogger("log error")
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
