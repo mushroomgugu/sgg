@@ -19,7 +19,7 @@ import os
 import random
 Tensor = FloatTensor
 
-
+# 参数
 BATCH_SIZE = 8
 LR = 0.01
 GAMMA = 0.90
@@ -33,6 +33,7 @@ DATE_FORMAT = "%m/%d/%Y %H:%M:%S %p"
 
 logging.basicConfig(filename='my.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
 
+# 层
 class MyLayer(nn.Module):
     def __init__(self, in_features, out_features, bias = True):
         super(MyLayer, self).__init__()
@@ -68,6 +69,7 @@ class MyLayer(nn.Module):
         stdv_3 = 1. / math.sqrt(self.w_3.size(0))
         self.w_3.data.uniform_(-stdv_3, stdv_3)
 
+# 模型
 class QNetwork(nn.Module):
     def __init__(self):
         super(QNetwork, self).__init__()
@@ -144,7 +146,7 @@ class QNetwork(nn.Module):
         output = self.layer4(action_, d, s)
         return output
 
-
+# DQN
 class DQN:
     def __init__(self):
         super(DQN, self).__init__()
@@ -357,10 +359,11 @@ if __name__ == '__main__':
         file_list = os.listdir(root_dir)
         times = 0
         finish = False
+
+        # 训练
         while True:
             if times > 0:
                 logging.info("================================")
-            # path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
             rand_txt = random.choice(file_list)
             path = root_dir + '/' + rand_txt
             f = open(path, mode='r')
@@ -443,8 +446,8 @@ if __name__ == '__main__':
             if finish:
                 break
         dqn.save_model()
+
         # 测试代码
-        # path = '/home/wby/wby/wby_outputs/train/sgdet_train/train_img_predinfo_txt_noconstraint/vg_train_sgdet_1000-2000.txt'
         times = 0
         for file in file_list:
             times += 1
