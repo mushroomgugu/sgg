@@ -80,57 +80,101 @@ class QNetwork(nn.Module):
         self.layer3 = nn.Linear(1024, 1, False)
         self.layer4 = MyLayer(4136, 1)
 
-
     def forward(self, x, c, a):
         # print(c)
         # v
         num = np.shape(c)[1]
         # print(num)
+        # print(num)
+        if a >= num:
+            print("a")
+            print(a)
         if torch.cuda.is_available():
-            lay1_x = torch.zeros(num, 4136).cuda()
+            lay1_x = torch.zeros(1, 4136, requires_grad=True).cuda()
             w = torch.zeros(1, num).cuda()
-            chosen = torch.zeros(num, 4136).cuda()
-            chosen_w = torch.zeros(1, num).cuda()
+            chosen = torch.zeros(num, 4136, requires_grad=True).cuda()
+            chosen_w = torch.zeros(1, num, requires_grad=True).cuda()
             chosen_num = 0
-            action_ = torch.zeros(0, 4136).cuda()
+            action_ = torch.zeros(1, 4136, requires_grad=True).cuda()
         else:
-            lay1_x = torch.zeros(num, 4136)
-            w = torch.zeros(1, num)
-            chosen = torch.zeros(num, 4136)
-            chosen_w = torch.zeros(1, num)
+            lay1_x = torch.zeros(1, 4136, requires_grad=True)
+            w = torch.zeros(1, num, requires_grad=True)
+            chosen = torch.zeros(num, 4136, requires_grad=True)
+            chosen_w = torch.zeros(1, num, requires_grad=True)
             chosen_num = 0
-            action_ = torch.zeros(0, 4136)
+            action_ = torch.zeros(1, 4136, requires_grad=True)
+
+        # action:
+        a = int(a)
+        # print(a)
+        xy = x[a:a + 1, 4096:4100]
+        # xy = torch.from_numpy(xy)
+        if torch.cuda.is_available():
+            xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True).cuda()
+        else:
+            xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True)
+        # print(xy)
+        xy = self.layer1(xy)
+        action_box = x[a:a + 1, :4096]
+        # print(action_box)
+        if torch.cuda.is_available():
+            action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True).cuda()
+            box_vec = torch.cat((action_box, xy), 1).cuda()
+        else:
+            action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True)
+            box_vec = torch.cat((action_box, xy), 1)
+        # print(box_vec)
+        action_ = box_vec
+
         for i in range(num):
-            xy = x[i:i+1, 4096:4100]
+            xy = x[i:i + 1, 4096:4100]
             # xy = torch.from_numpy(xy)
             if torch.cuda.is_available():
-                xy = torch.tensor(xy, dtype=torch.float32).cuda()
+                xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True).cuda()
             else:
-                xy = torch.tensor(xy, dtype=torch.float32)
+                xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True)
             # print(xy)
             xy = self.layer1(xy)
-            action_box = x[i:i+1, :4096]
+            action_box = x[i:i + 1, :4096]
             # print(action_box)
             if torch.cuda.is_available():
-                action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32).cuda()
+                action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True).cuda()
                 box_vec = torch.cat((action_box, xy), 1).cuda()
             else:
-                action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32)
+                action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True)
                 box_vec = torch.cat((action_box, xy), 1)
-            lay1_x[i:i+1, :] = box_vec
+            # print(box_vec)
+            if box_vec.shape != action_.shape:
+                print(box_vec.shape)
+                print(action_.shape)
+            box_vec_a = torch.cat((box_vec, action_), 1)
+            # lay1_x[i:i+1, :] = box_vec
+            if i != 0:
+                lay1_x = torch.cat((lay1_x, box_vec), 0)
+            else:
+                lay1_x = box_vec
             # print(box_vec)
             # w
-            box_vec = F.tanh(self.layer2(box_vec))
-            box_vec = self.layer3(box_vec)
+            box_vec_ = F.tanh(self.layer2(box_vec_a))
+            box_vec_ = self.layer3(box_vec_)
             # print(box_vec)
-            w[0, i:i+1] = box_vec
+            # w[0, i:i+1] = box_vec
+            if i != 0:
+                w = torch.cat((w, box_vec_), 1)
+            else:
+                w = box_vec_
             if c[0, i] == 1:
-                chosen[chosen_num:chosen_num+1, :] = lay1_x[i:i+1, :]
-                chosen_w[0, chosen_num:chosen_num+1] = w[0, i:i+1]
+                # chosen[chosen_num:chosen_num+1, :] = lay1_x[i:i+1, :]
+                # chosen_w[0, chosen_num:chosen_num+1] = w[0, i:i+1]
+                if i != 0:
+                    chosen = torch.cat((chosen, box_vec), 0)
+                    chosen_w = torch.cat((chosen_w, box_vec_), 1)
+                else:
+                    chosen = box_vec
+                    chosen_w = box_vec_
                 chosen_num += 1
-            elif i == a:
-                action_ = lay1_x[i:i + 1, :]
                 # print('action')
+        chosen.register_hook(lambda g: print(g))
         w_softmax = F.softmax(w, dim=0)
         chosen_w_true = chosen_w[0:1, :chosen_num]
         c_w_softmax = F.softmax(chosen_w_true, dim=0)
@@ -249,14 +293,13 @@ class DQN:
         self.memory[index, :] = transition
         self.memory_counter += 1
 
-
     def learn(self):
 
         # update the parameters
         if self.learn_step_counter % Q_NETWORK_ITERATION == 0:
             self.target_net.load_state_dict(self.eval_net.state_dict())
 
-        print(self.memory)
+        # print(self.memory)
         sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
         batch_memory = self.memory[sample_index, :]
         batch_pic_id = batch_memory[:, 0:1]
@@ -272,13 +315,14 @@ class DQN:
             # print(int(batch_pic_id[k, 0][0, 0]))
 
             all_box = self.all_box_list[int(batch_pic_id[k, 0])]
-            q_eval = self.eval_net(all_box, batch_state[k:k+1, :], batch_action[k:k+1, 0])
+            q_eval = self.eval_net(all_box, batch_state[k:k + 1, :], batch_action[k, 0])
             q_next_max = - sys.float_info.max
-            for j in range(self.box_num):
-                if batch_next_state[k:k+1, j] == 0:
+            box_num = np.shape(all_box)[0]
+            for j in range(box_num):
+                if batch_next_state[k:k + 1, j] == 0:
                     # print('next')
                     # print(j)
-                    q_next = self.target_net(all_box, batch_next_state[k:k+1, :], j)
+                    q_next = self.target_net(all_box, batch_next_state[k:k + 1, :], j)
                     # print(q_next.detach().numpy())
                     if torch.cuda.is_available():
                         if q_next_max < q_next.cpu().detach().numpy()[0, 0]:
