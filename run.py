@@ -199,7 +199,7 @@ class DQN:
         # When we store the memory, we put the state, action, reward and next_state in the memory
         # here reward and action is a number, state is a ndarray
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
-        self.loss_func = nn.MSELoss()
+        self.loss_func = nn.SmoothL1Loss()
 
     def set_data(self, all_box, pic_id):
         self.box_num = np.shape(all_box)[0]
