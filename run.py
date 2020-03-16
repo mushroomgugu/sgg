@@ -20,7 +20,7 @@ import random
 Tensor = FloatTensor
 
 # 参数
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 LR = 0.01
 GAMMA = 0.90
 EPISILO = 0.9
@@ -76,7 +76,7 @@ class QNetwork(nn.Module):
         self.layer1 = nn.Linear(4, 40)
         self.layer1.weight.data.normal_(-0.0001, 0.0001)
         self.layer1.bias.data.normal_(-0.01, 0.01)
-        self.layer2 = nn.Linear(4136, 1024)
+        self.layer2 = nn.Linear(8272, 1024)
         self.layer3 = nn.Linear(1024, 1, False)
         self.layer4 = MyLayer(4136, 1)
 
@@ -116,6 +116,7 @@ class QNetwork(nn.Module):
             box_vec = torch.cat((action_box, xy), 1)
         action_ = box_vec
 
+        has_chosen = False
         for i in range(num):
             xy = x[i:i + 1, 4096:4100]
             if torch.cuda.is_available():
@@ -146,12 +147,13 @@ class QNetwork(nn.Module):
             else:
                 w = box_vec_
             if c[0, i] == 1:
-                if i != 0:
+                if has_chosen:
                     chosen = torch.cat((chosen, box_vec), 0)
                     chosen_w = torch.cat((chosen_w, box_vec_), 1)
                 else:
                     chosen = box_vec
                     chosen_w = box_vec_
+                    has_chosen = True
                 chosen_num += 1
         w_softmax = F.softmax(w, dim=0)
         chosen_w_true = chosen_w[0:1, :chosen_num]
