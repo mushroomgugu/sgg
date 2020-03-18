@@ -17,6 +17,7 @@ import logging
 import traceback
 import os
 import random
+from torch.autograd import Variable
 Tensor = FloatTensor
 
 # 参数
@@ -31,7 +32,7 @@ Q_NETWORK_ITERATION = 100
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%m/%d/%Y %H:%M:%S %p"
 
-logging.basicConfig(filename='my.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
+logging.basicConfig(filename='my2.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
 
 # 层
 class MyLayer(nn.Module):
@@ -59,7 +60,7 @@ class MyLayer(nn.Module):
         self.reset_parameters()
 
     def forward(self, x, d, s):
-        return self.w_1.mm(x.t()) + x.mm(self.w_2).mm(d.t()) - x.mm(self.w_3).mm(F.tanh(s.t())) + self.bias
+        return self.w_1.mm(x.t()) + x.mm(self.w_2).mm(d.t()) - x.mm(self.w_3).mm(torch.tanh(s.t())) + self.bias
 
     def reset_parameters(self):
         stdv_1 = 1. / math.sqrt(self.w_1.size(0))
@@ -80,94 +81,115 @@ class QNetwork(nn.Module):
         self.layer3 = nn.Linear(1024, 1, False)
         self.layer4 = MyLayer(4136, 1)
 
-    def forward(self, x, c, a):
+    def forward(self, all_box, all_box_pos, chosen_box, chosen_pos, action_box, action_pos, action_a_box, action_a_pos, action_c_box, action_c_pos):
         # print(c)
         # v
-        num = np.shape(c)[1]
+        box_num = np.shape(all_box)[0]
+        # chosen_num = np.shape(chosen_box)[0]
+        chosen_num = list(chosen_box.size())[0]
+        # print(chosen_num)
         if torch.cuda.is_available():
             lay1_x = torch.zeros(1, 4136, requires_grad=True).cuda()
             w = torch.zeros(1, num).cuda()
             chosen = torch.zeros(num, 4136, requires_grad=True).cuda()
             chosen_w = torch.zeros(1, num, requires_grad=True).cuda()
-            chosen_num = 0
+            # chosen_num = 0
             action_ = torch.zeros(1, 4136, requires_grad=True).cuda()
+            chosen_box_a = torch.zeros(1, 8272, requires_grad=True).cuda()
         else:
             lay1_x = torch.zeros(1, 4136, requires_grad=True)
             w = torch.zeros(1, num, requires_grad=True)
             chosen = torch.zeros(num, 4136, requires_grad=True)
             chosen_w = torch.zeros(1, num, requires_grad=True)
-            chosen_num = 0
+            # chosen_num = 0
             action_ = torch.zeros(1, 4136, requires_grad=True)
+            chosen_box_a = torch.zeros(1, 8272, requires_grad=True)
+
+        all_box_pos_map = self.layer1(all_box_pos)
+        action_pos_map = self.layer1(action_pos)
+        action_a_pos_map = self.layer1(action_a_pos)
+
+        all_box = torch.cat((all_box, all_box_pos_map), 1)
+        action_box = torch.cat((action_box, action_pos_map), 1)
+        action_a_box = torch.cat((action_a_box, action_a_pos_map), 1)
+
+        all_box_a = torch.cat((all_box, action_a_box), 1)
+
+        if chosen_num > 0:
+            action_c_pos_map = self.layer1(action_c_pos)
+            action_c_box = torch.cat((action_c_box, action_c_pos_map), 1)
+            chosen_pos_map = self.layer1(chosen_pos)
+            chosen_box = torch.cat((chosen_box, chosen_pos_map), 1)
+            chosen_box_a = torch.cat((chosen_box, action_c_box), 1)
+
 
         # action:
-        a = int(a)
-        xy = x[a:a + 1, 4096:4100]
-        if torch.cuda.is_available():
-            xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True).cuda()
-        else:
-            xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True)
-        xy = self.layer1(xy)
-        action_box = x[a:a + 1, :4096]
-        if torch.cuda.is_available():
-            action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True).cuda()
-            box_vec = torch.cat((action_box, xy), 1).cuda()
-        else:
-            action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True)
-            box_vec = torch.cat((action_box, xy), 1)
-        action_ = box_vec
+        # a = int(a)
+        # xy = x[a:a + 1, 4096:4100]
+        # # if torch.cuda.is_available():
+        # #     xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True).cuda()
+        # # else:
+        # #     xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True)
+        # xy = self.layer1(xy)
+        # action_box = x[a:a + 1, :4096]
+        # # if torch.cuda.is_available():
+        # #     # action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True).cuda()
+        # #     box_vec = torch.cat((action_box, xy), 1).cuda()
+        # # else:
+        # #     # action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True)
+        # #     box_vec = torch.cat((action_box, xy), 1)
+        # box_vec = torch.cat((action_box, xy), 1)
+        # action_ = box_vec
+        #
+        # has_chosen = False
+        #
+        # for i in range(num):
+        #     xy = x[i:i + 1, 4096:4100]
+        #     xy = self.layer1(xy)
+        #     action_box = x[i:i + 1, :4096]
+        #     box_vec = torch.cat((action_box, xy), 1)
+        #     if box_vec.shape != action_.shape:
+        #         print(box_vec.shape)
+        #         print(action_.shape)
+        #     box_vec_a = torch.cat((box_vec, action_), 1)
+        #     if i != 0:
+        #         lay1_x = torch.cat((lay1_x, box_vec), 0)
+        #         lay1_x_a = torch.cat((lay1_x_a, box_vec_a), 0)
+        #     else:
+        #         lay1_x = box_vec
+        #         lay1_x_a = box_vec_a
+        #     if c[0, i] == 1:
+        #         if has_chosen:
+        #             chosen = torch.cat((chosen, box_vec), 0)
+        #             chosen_a = torch.cat((chosen_a, box_vec_a), 0)
+        #             # chosen_w = torch.cat((chosen_w, box_vec_), 1)
+        #         else:
+        #             chosen = box_vec
+        #             chosen_a = box_vec_a
+        #             # chosen_w = box_vec_
+        #             has_chosen = True
+        #         chosen_num += 1
+        d = torch.tanh(self.layer2(all_box_a))
+        d = self.layer3(d)
+        d = torch.t(d)
 
-        has_chosen = False
-        for i in range(num):
-            xy = x[i:i + 1, 4096:4100]
-            if torch.cuda.is_available():
-                xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True).cuda()
-            else:
-                xy = torch.tensor(xy, dtype=torch.float32, requires_grad=True)
-            xy = self.layer1(xy)
-            action_box = x[i:i + 1, :4096]
-            if torch.cuda.is_available():
-                action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True).cuda()
-                box_vec = torch.cat((action_box, xy), 1).cuda()
-            else:
-                action_box = torch.tensor(torch.from_numpy(action_box), dtype=torch.float32, requires_grad=True)
-                box_vec = torch.cat((action_box, xy), 1)
-            if box_vec.shape != action_.shape:
-                print(box_vec.shape)
-                print(action_.shape)
-            box_vec_a = torch.cat((box_vec, action_), 1)
-            if i != 0:
-                lay1_x = torch.cat((lay1_x, box_vec), 0)
-            else:
-                lay1_x = box_vec
-            # w
-            box_vec_ = F.tanh(self.layer2(box_vec_a))
-            box_vec_ = self.layer3(box_vec_)
-            if i != 0:
-                w = torch.cat((w, box_vec_), 1)
-            else:
-                w = box_vec_
-            if c[0, i] == 1:
-                if has_chosen:
-                    chosen = torch.cat((chosen, box_vec), 0)
-                    chosen_w = torch.cat((chosen_w, box_vec_), 1)
-                else:
-                    chosen = box_vec
-                    chosen_w = box_vec_
-                    has_chosen = True
-                chosen_num += 1
-        w_softmax = F.softmax(w, dim=0)
-        chosen_w_true = chosen_w[0:1, :chosen_num]
-        c_w_softmax = F.softmax(chosen_w_true, dim=0)
-        chosen_true = chosen[:chosen_num, :]
-        d = w_softmax.mm(lay1_x)
+        d = torch.softmax(d, dim=0)
+        # chosen_w_true = chosen_w[0:1, :chosen_num]
+
+        # chosen_true = chosen[:chosen_num, :]
+        d = d.mm(all_box)
         if chosen_num != 0:
-            s = c_w_softmax.mm(chosen_true)
+            s = torch.tanh(self.layer2(chosen_box_a))
+            s = self.layer3(s)
+            s = torch.t(s)
+            s = torch.softmax(s, dim=0)
+            s = s.mm(chosen_box)
         else:
             if torch.cuda.is_available():
-                s = torch.zeros(1, 4136).cuda()
+                s = torch.zeros(1, 4136, requires_grad=True).cuda()
             else:
-                s = torch.zeros(1, 4136)
-        output = self.layer4(action_, d, s)
+                s = torch.zeros(1, 4136, requires_grad=True)
+        output = self.layer4(action_box, d, s)
         return output
 
 # DQN
@@ -199,7 +221,7 @@ class DQN:
         # When we store the memory, we put the state, action, reward and next_state in the memory
         # here reward and action is a number, state is a ndarray
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
-        self.loss_func = nn.SmoothL1Loss()
+        self.loss_func = nn.MSELoss()
 
     def set_data(self, all_box, pic_id):
         self.box_num = np.shape(all_box)[0]
@@ -217,9 +239,47 @@ class DQN:
         if np.random.randn() <= EPISILO:  # greedy policy
             max_q = - sys.float_info.max
             action_n = -1
+            chosen_id = np.argwhere(c==1)[:, 1]
+            chosen_box = self.all_box[chosen_id, :4096]
+            chosen_pos = self.all_box[chosen_id, 4096:4100]
+
+            chosen_num = np.shape(chosen_box)[0]
+
             for i in range(self.box_num):
                 if c[0, i] != 1:
-                    action_value = self.eval_net(self.all_box, c, i)
+                    action_box = self.all_box[i:i+1, :4096]
+                    action_pos = self.all_box[i:i+1, 4096:4100]
+                    action_a_box = np.repeat(action_box, self.box_num, axis=0)
+                    action_a_pos = np.repeat(action_pos, self.box_num, axis=0)
+                    action_c_box = np.repeat(action_box, chosen_num, axis=0)
+                    action_c_pos = np.repeat(action_pos, chosen_num, axis=0)
+                    if torch.cuda.is_available():
+                        all_box = Variable(torch.FloatTensor(self.all_box[:, :4096]).cuda())
+                        all_pos = Variable(torch.FloatTensor(self.all_box[:, 4096:4100]).cuda())
+                        chosen_box_ten = Variable(torch.FloatTensor(chosen_box).cuda())
+                        chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos).cuda())
+                        action_box_ten = Variable(torch.FloatTensor(action_box).cuda())
+                        action_pos_ten = Variable(torch.FloatTensor(action_pos).cuda())
+                        action_a_box_ten = Variable(torch.FloatTensor(action_a_box).cuda())
+                        action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos).cuda())
+                        action_c_box_ten = Variable(torch.FloatTensor(action_c_box).cuda())
+                        action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos).cuda())
+                    else:
+                        all_box = Variable(torch.FloatTensor(self.all_box[:, :4096]))
+                        all_pos = Variable(torch.FloatTensor(self.all_box[:, 4096:4100]))
+                        chosen_box_ten = Variable(torch.FloatTensor(chosen_box))
+                        chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos))
+                        action_box_ten = Variable(torch.FloatTensor(action_box))
+                        action_pos_ten = Variable(torch.FloatTensor(action_pos))
+                        action_a_box_ten = Variable(torch.FloatTensor(action_a_box))
+                        action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos))
+                        action_c_box_ten = Variable(torch.FloatTensor(action_c_box))
+                        action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos))
+
+                    action_value = self.eval_net(all_box, all_pos, chosen_box_ten, chosen_pos_ten, action_box_ten,
+                                                 action_pos_ten, action_a_box_ten, action_a_pos_ten, action_c_box_ten,
+                                                 action_c_pos_ten)
+
                     if torch.cuda.is_available():
                         action_value_cpu = action_value.cpu()
                         # print("choose_action")
@@ -243,9 +303,46 @@ class DQN:
     def choose_action_test(self, c):
         max_q = - sys.float_info.max
         action_n = -1
+        chosen_id = np.argwhere(c == 1)[:, 1]
+        chosen_box = self.all_box[chosen_id, :4096]
+        chosen_pos = self.all_box[chosen_id, 4096:4100]
+
+        chosen_num = np.shape(chosen_box)[0]
+
         for i in range(self.box_num):
             if c[0, i] != 1:
-                action_value = self.eval_net(self.all_box, c, i)
+                action_box = self.all_box[i:i + 1, :4096]
+                action_pos = self.all_box[i:i + 1, 4096:4100]
+                action_a_box = np.repeat(action_box, self.box_num, axis=0)
+                action_a_pos = np.repeat(action_pos, self.box_num, axis=0)
+                action_c_box = np.repeat(action_box, chosen_num, axis=0)
+                action_c_pos = np.repeat(action_pos, chosen_num, axis=0)
+                if torch.cuda.is_available():
+                    all_box = Variable(torch.FloatTensor(self.all_box[:, :4096]).cuda())
+                    all_pos = Variable(torch.FloatTensor(self.all_box[:, 4096:4100]).cuda())
+                    chosen_box_ten = Variable(torch.FloatTensor(chosen_box).cuda())
+                    chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos).cuda())
+                    action_box_ten = Variable(torch.FloatTensor(action_box).cuda())
+                    action_pos_ten = Variable(torch.FloatTensor(action_pos).cuda())
+                    action_a_box_ten = Variable(torch.FloatTensor(action_a_box).cuda())
+                    action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos).cuda())
+                    action_c_box_ten = Variable(torch.FloatTensor(action_c_box).cuda())
+                    action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos).cuda())
+                else:
+                    all_box = Variable(torch.FloatTensor(self.all_box[:, :4096]))
+                    all_pos = Variable(torch.FloatTensor(self.all_box[:, 4096:4100]))
+                    chosen_box_ten = Variable(torch.FloatTensor(chosen_box))
+                    chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos))
+                    action_box_ten = Variable(torch.FloatTensor(action_box))
+                    action_pos_ten = Variable(torch.FloatTensor(action_pos))
+                    action_a_box_ten = Variable(torch.FloatTensor(action_a_box))
+                    action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos))
+                    action_c_box_ten = Variable(torch.FloatTensor(action_c_box))
+                    action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos))
+
+                action_value = self.eval_net(all_box, all_pos, chosen_box_ten, chosen_pos_ten, action_box_ten,
+                                             action_pos_ten, action_a_box_ten, action_a_pos_ten, action_c_box_ten,
+                                             action_c_pos_ten)
                 if torch.cuda.is_available():
                     action_value_cpu = action_value.cpu()
                     # print("choose_action")
@@ -294,15 +391,91 @@ class DQN:
             # print(batch_pic_id[k, 0])
             # print(int(batch_pic_id[k, 0][0, 0]))
 
-            all_box = self.all_box_list[int(batch_pic_id[k, 0])]
-            q_eval = self.eval_net(all_box, batch_state[k:k + 1, :], batch_action[k, 0])
-            q_next_max = - sys.float_info.max
+            all_box = self.all_box_list[int(batch_pic_id[k, 0])][:, :4096]
+            all_pos = self.all_box_list[int(batch_pic_id[k, 0])][:, 4096:4100]
+            chosen_id = np.argwhere(batch_state[k:k + 1, :] == 1)[:, 1]
+            chosen_box = all_box[chosen_id, :]
+            chosen_pos = all_pos[chosen_id, :]
+            chosen_next_id = np.argwhere(batch_next_state[k:k + 1, :] == 1)[:, 1]
+            chosen_next_box = all_box[chosen_next_id, :]
+            chosen_next_pos = all_pos[chosen_next_id, :]
+
+            chosen_num = np.shape(chosen_box)[0]
+            chosen_next_num = np.shape(chosen_next_box)[0]
             box_num = np.shape(all_box)[0]
+
+            a_index = int(batch_action[k, 0])
+            action_box = all_box[a_index:a_index+1, :]
+            action_pos = all_pos[a_index:a_index+1, :]
+            action_a_box = np.repeat(action_box, box_num, axis=0)
+            action_a_pos = np.repeat(action_pos, box_num, axis=0)
+            action_c_box = np.repeat(action_box, chosen_num, axis=0)
+            action_c_pos = np.repeat(action_pos, chosen_num, axis=0)
+
+            if torch.cuda.is_available():
+                all_box_ten = Variable(torch.FloatTensor(all_box).cuda())
+                all_pos_ten = Variable(torch.FloatTensor(all_pos).cuda())
+                chosen_box_ten = Variable(torch.FloatTensor(chosen_box).cuda())
+                chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos).cuda())
+                action_box_ten = Variable(torch.FloatTensor(action_box).cuda())
+                action_pos_ten = Variable(torch.FloatTensor(action_pos).cuda())
+                chosen_next_box_ten = Variable(torch.FloatTensor(chosen_next_box).cuda())
+                chosen_next_pos_ten = Variable(torch.FloatTensor(chosen_next_pos).cuda())
+                action_a_box_ten = Variable(torch.FloatTensor(action_a_box).cuda())
+                action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos).cuda())
+                action_c_box_ten = Variable(torch.FloatTensor(action_c_box).cuda())
+                action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos).cuda())
+            else:
+                all_box_ten = Variable(torch.FloatTensor(all_box))
+                all_pos_ten = Variable(torch.FloatTensor(all_pos))
+                chosen_box_ten = Variable(torch.FloatTensor(chosen_box))
+                chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos))
+                action_box_ten = Variable(torch.FloatTensor(action_box))
+                action_pos_ten = Variable(torch.FloatTensor(action_pos))
+                chosen_next_box_ten = Variable(torch.FloatTensor(chosen_next_box))
+                chosen_next_pos_ten = Variable(torch.FloatTensor(chosen_next_pos))
+                action_a_box_ten = Variable(torch.FloatTensor(action_a_box))
+                action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos))
+                action_c_box_ten = Variable(torch.FloatTensor(action_c_box))
+                action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos))
+
+            # print(batch_action[k, 0])
+
+            q_eval = self.eval_net(all_box_ten, all_pos_ten, chosen_box_ten, chosen_pos_ten, action_box_ten,
+                                             action_pos_ten, action_a_box_ten, action_a_pos_ten, action_c_box_ten,
+                                             action_c_pos_ten)
+            q_next_max = - sys.float_info.max
+
             for j in range(box_num):
                 if batch_next_state[k:k + 1, j] == 0:
                     # print('next')
                     # print(j)
-                    q_next = self.target_net(all_box, batch_next_state[k:k + 1, :], j)
+
+                    action_next_box = all_box[j:j+1, :]
+                    action_next_pos = all_pos[j:j+1, :]
+                    action_next_a_box = np.repeat(action_next_box, box_num, axis=0)
+                    action_next_a_pos = np.repeat(action_next_pos, box_num, axis=0)
+                    action_next_c_box = np.repeat(action_next_box, chosen_next_num, axis=0)
+                    action_next_c_pos = np.repeat(action_next_pos, chosen_next_num, axis=0)
+
+                    if torch.cuda.is_available():
+                        action_next_box_ten = Variable(torch.FloatTensor(action_next_box).cuda())
+                        action_next_pos_ten = Variable(torch.FloatTensor(action_next_pos).cuda())
+                        action_next_a_box_ten = Variable(torch.FloatTensor(action_next_a_box).cuda())
+                        action_next_a_pos_ten = Variable(torch.FloatTensor(action_next_a_pos).cuda())
+                        action_next_c_box_ten = Variable(torch.FloatTensor(action_next_c_box).cuda())
+                        action_next_c_pos_ten = Variable(torch.FloatTensor(action_next_c_pos).cuda())
+                    else:
+                        action_next_box_ten = Variable(torch.FloatTensor(action_next_box))
+                        action_next_pos_ten = Variable(torch.FloatTensor(action_next_pos))
+                        action_next_a_box_ten = Variable(torch.FloatTensor(action_next_a_box))
+                        action_next_a_pos_ten = Variable(torch.FloatTensor(action_next_a_pos))
+                        action_next_c_box_ten = Variable(torch.FloatTensor(action_next_c_box))
+                        action_next_c_pos_ten = Variable(torch.FloatTensor(action_next_c_pos))
+
+                    q_next = self.target_net(all_box_ten, all_pos_ten, chosen_next_box_ten, chosen_next_pos_ten,
+                                             action_next_box_ten, action_next_pos_ten, action_next_a_box_ten,
+                                             action_next_a_pos_ten, action_next_c_box_ten, action_next_c_pos_ten)
                     # print(q_next.detach().numpy())
                     if torch.cuda.is_available():
                         if q_next_max < q_next.cpu().detach().numpy()[0, 0]:
@@ -318,21 +491,66 @@ class DQN:
                             else:
                                 q_next_max = q_next.detach().numpy()[0, 0]
                             q_next_max_true = q_next
+
             q_target = batch_reward[k, 0] + GAMMA * q_next_max_true
+            print("r: ", batch_reward[k, 0], "q_eval: ", q_eval, "q_next: ", q_next_max_true, "q_target: ", q_target)
             loss = self.loss_func(q_eval, q_target)
             self.loss_arr.append(loss)
 
             self.optimizer.zero_grad()
             loss.backward()
+            params = list(self.eval_net.named_parameters())
+            # print(params)
+            for (name, param) in params:
+                print('name: ', name, '\nrequires_grad: ', param.requires_grad, '\ngrad: ', param.grad, '\nparam: ', param)
+                print('nonzero: ', list(torch.nonzero(param.grad).size()))
             self.optimizer.step()
 
 
     def get_q(self, state, action):
-        q_tensor = self.eval_net(self.all_box, state, action)
+        chosen_id = np.argwhere(state == 1)[:, 1]
+        chosen_box = self.all_box[chosen_id, :4096]
+        chosen_pos = self.all_box[chosen_id, 4096:4100]
+        chosen_num = np.shape(chosen_box)[0]
+
+        action_box = self.all_box[action:action + 1, :4096]
+        action_pos = self.all_box[action:action + 1, 4096:4100]
+        action_a_box = np.repeat(action_box, self.box_num, axis=0)
+        action_a_pos = np.repeat(action_pos, self.box_num, axis=0)
+        action_c_box = np.repeat(action_box, chosen_num, axis=0)
+        action_c_pos = np.repeat(action_pos, chosen_num, axis=0)
+
         if torch.cuda.is_available():
-            return q_tensor.cpu().detach().numpy()[0, 0]
+            all_box = Variable(torch.FloatTensor(self.all_box[:, :4096]).cuda())
+            all_pos = Variable(torch.FloatTensor(self.all_box[:, 4096:4100]).cuda())
+            chosen_box_ten = Variable(torch.FloatTensor(chosen_box).cuda())
+            chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos).cuda())
+            action_box_ten = Variable(torch.FloatTensor(action_box).cuda())
+            action_pos_ten = Variable(torch.FloatTensor(action_pos).cuda())
+            action_a_box_ten = Variable(torch.FloatTensor(action_a_box).cuda())
+            action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos).cuda())
+            action_c_box_ten = Variable(torch.FloatTensor(action_c_box).cuda())
+            action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos).cuda())
+
         else:
-            return q_tensor.detach().numpy()[0, 0]
+            all_box = Variable(torch.FloatTensor(self.all_box[:, :4096]))
+            all_pos = Variable(torch.FloatTensor(self.all_box[:, 4096:4100]))
+            chosen_box_ten = Variable(torch.FloatTensor(chosen_box))
+            chosen_pos_ten = Variable(torch.FloatTensor(chosen_pos))
+            action_box_ten = Variable(torch.FloatTensor(action_box))
+            action_pos_ten = Variable(torch.FloatTensor(action_pos))
+            action_a_box_ten = Variable(torch.FloatTensor(action_a_box))
+            action_a_pos_ten = Variable(torch.FloatTensor(action_a_pos))
+            action_c_box_ten = Variable(torch.FloatTensor(action_c_box))
+            action_c_pos_ten = Variable(torch.FloatTensor(action_c_pos))
+
+        action_value = self.eval_net(all_box, all_pos, chosen_box_ten, chosen_pos_ten, action_box_ten,
+                                     action_pos_ten, action_a_box_ten, action_a_pos_ten, action_c_box_ten,
+                                     action_c_pos_ten)
+        if torch.cuda.is_available():
+            return action_value.cpu().detach().numpy()[0, 0]
+        else:
+            return action_value.detach().numpy()[0, 0]
 
     def print_loss(self):
         print(self.loss_arr)
@@ -342,9 +560,6 @@ class DQN:
                 if loss.cpu().detach().numpy() > 0.01:
                     finish = False
             else:
-                print(loss)
-                print(loss.detach())
-                print(loss.detach().numpy())
                 if loss.detach().numpy() > 0.01:
                     finish = False
         self.loss_arr.clear()
@@ -359,7 +574,7 @@ def get_score(c, c_true):
     up = 0.0
     down = 0.0
     finish = True
-    for i in range(np.shape(c)[1]):
+    for i in range(len(c_true)):
         if c[0, i] == c_true[i] and c[0, i] == 1:
             up += 1.0
         elif c_true[i] == 1:
