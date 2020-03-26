@@ -61,15 +61,23 @@ class MyLayer(nn.Module):
 
     def forward(self, x, d, s, batch_num, action_num):
         # print(s)
+        # 转置，将行向量变成列向量
         x_t = x.permute(0, 2, 1)
         d_t = d.permute(0, 2, 1)
         s_t = s.permute(0, 2, 1)
 
+        # 第一项：w_1*v(a)
         result_1 = self.w_1.matmul(x_t).squeeze()
         if batch_num == 1:
             result_1 = result_1.unsqueeze(0)
+
+        # 第二项：v(a)_t*w_2*d
         result_2 = x.matmul(self.w_2).matmul(d_t)
+
+        # 第三项：v(a)_t*w_3*s
         result_3 = x.matmul(self.w_3).matmul(s_t)
+
+        # 取对角线
         if torch.cuda.is_available():
             mask = torch.arange(start=0, end=action_num, step=1).unsqueeze(0).unsqueeze(0).cuda()
         else:
@@ -78,7 +86,7 @@ class MyLayer(nn.Module):
         result_2 = result_2.gather(1, mask).squeeze()
         result_3 = result_3.gather(1, mask).squeeze()
 
-        # print(list(result_1.size()))
+        # 将b扩展成相应维度
         num_1 = list(result_1.size())[0]
         num_2 = list(result_1.size())[1]
         b = self.bias.repeat(num_1, num_2)
@@ -104,39 +112,45 @@ class QNetwork(nn.Module):
         self.layer3 = nn.Linear(1024, 1, False)
         self.layer4 = MyLayer(4136, 1)
 
+    # 输入变量说明：
+    # all_box：     所有的 box 的特征向量矩阵                              维度为：[batch_num, 64, 64, 4096]  分别为batch_num，最大action_num，最大box_num，特征向量维度
+    # all_box_pos： 所有 box 的坐标矩阵                                   维度为：[batch_num, 64, 64, 4]     分别为batch_num，最大action_num，最大box_num，坐标维度
+    # chosen_box：  所有已经选择的 box 特征向量矩阵                         维度为：[batch_num, 64, 33, 4096]  分别为batch_num，最大action_num，最大chosen_num，特征向量维度
+    # chosen_pos：  所有已经选择的 box 坐标矩阵                            维度为：[batch_num, 64, 33, 4]      分别为batch_num，最大action_num，最大chosen_num，坐标维度
+    # action_box：  所有可选择的 box 特征向量矩阵                           维度为：[batch_num, 64, 4096]      分别为batch_num，最大action_num，特征向量维度
+    # action_pos：  所有可选择的 box 坐标矩阵                              维度为：[batch_num, 64, 4]         分别为batch_num，最大action_num，坐标维度
+    # action_a_box：用于和 all_box 拼接的可选择box的特征向量矩阵             维度为：[batch_num, 64, 64, 4096]  分别为batch_num，最大action_num，最大box_num，特征向量维度
+    # action_a_pos：用于和 all_box 拼接的可选择的box坐标矩阵                维度为：[batch_num, 64, 64, 4]     分别为batch_num，最大action_num，最大box_num，坐标维度
+    # action_c_box：用于和 chosen_box 拼接的可选择的box的特征向量矩阵        维度为：[batch_num, 64, 33, 4096]  分别为batch_num，最大action_num，特征向量维度
+    # action_c_pos：用于和 chosen_box 拼接的可选择的box的坐标矩阵           维度为：[batch_num, 64, 33, 4]     分别为batch_num，最大action_num，坐标维度
+    # box_num：     存储每个传入的 all_box 真实的 box 数量的 list
+    # action_num：  最大可选择 box 的数量，这里均为 64
+    # chosen_num：  每一条 batch 的已选择box的数量，list
+    # batch_num：   batch 的数量
+
     def forward(self, all_box, all_box_pos, chosen_box, chosen_pos, action_box, action_pos, action_a_box, action_a_pos, action_c_box, action_c_pos, box_num, action_num, chosen_num, batch_num):
 
         if batch_num > 1:
             batch_num = list(all_box.shape)[0]
 
+        # 获得坐标映射
         all_pos_map = self.layer1(all_box_pos)
         chosen_pos_map = self.layer1(chosen_pos)
         action_pos_map = self.layer1(action_pos)
         action_a_pos_map = self.layer1(action_a_pos)
         action_c_pos_map = self.layer1(action_c_pos)
-        # print(chosen_pos)
-        # print('chosen_pos_map\n')
-        # print(chosen_pos_map)
 
+        # 将坐标映射和特征向量矩阵拼接
         all_box = torch.cat((all_box, all_pos_map), dim=-1)
         chosen_box = torch.cat((chosen_box, chosen_pos_map), dim=-1)
         action_box = torch.cat((action_box, action_pos_map), dim=-1)
         action_a_box = torch.cat((action_a_box, action_a_pos_map), dim=-1)
         action_c_box = torch.cat((action_c_box, action_c_pos_map), dim=-1)
 
-        # all_box_a = torch.cat((all_box, action_a_box), dim=-1)
-        # chosen_box_a = torch.cat((chosen_box, action_c_box), dim=-1)
-        # d = torch.tanh(self.layer2(all_box_a))
-        # d = self.layer3(d)
-        # s = torch.tanh(self.layer2(chosen_box_a))
-        # s = self.layer3(s)
-
+        # 获得chosen_box和all_box的w
         for i in range(batch_num):
-            # print(all_box[i])
-            # print(action_a_box[i])
             all_box_a = torch.cat((all_box[i], action_a_box[i]), dim=-1)
             chosen_box_a = torch.cat((chosen_box[i], action_c_box[i]), dim=-1)
-            # print(all_box_a)
             d_i = torch.tanh(self.layer2(all_box_a))
             d_i = self.layer3(d_i)
             s_i = torch.tanh(self.layer2(chosen_box_a))
@@ -148,6 +162,8 @@ class QNetwork(nn.Module):
                 d = torch.cat((d, d_i.unsqueeze(0)), 0)
                 s = torch.cat((s, s_i.unsqueeze(0)), 0)
         d = torch.exp(d)
+
+        # 获得z
         if torch.cuda.is_available():
             z = torch.zeros((batch_num, action_num, 1, 1)).cuda()
         else:
@@ -156,13 +172,9 @@ class QNetwork(nn.Module):
             for j in range(action_num):
                 z[i, j, 0, 0] = torch.sum(d[i, j, :box_num[i], 0])
         d = torch.div(d, z)
-        # d = torch.mul(d, all_box)
-        #
-        # d = torch.sum(d, -2, False)
 
+        # chosen_box同理
         for i in range(batch_num):
-            # print(d[i, :, :, :].shape)
-            # print(all_box[i, :, :, :].shape)
             e = torch.bmm(d[i, :, :, :].permute(0, 2, 1), all_box[i, :, :, :])
             if i == 0:
                 f = e.squeeze().unsqueeze(0)
@@ -174,7 +186,6 @@ class QNetwork(nn.Module):
             z = torch.zeros((batch_num, action_num, 1, 1)).cuda()
         else:
             z = torch.zeros((batch_num, action_num, 1, 1))
-        # print(s)
         for i in range(batch_num):
             for j in range(action_num):
                 if chosen_num[i] != 0:
@@ -183,9 +194,9 @@ class QNetwork(nn.Module):
                     z[i, j, 0, 0] = torch.ones(1, 1, requires_grad=True).cuda()
         s = torch.div(s, z)
         s = torch.mul(s, chosen_box)
-        # print(chosen_box)
         s = torch.sum(s, -2, False)
 
+        # action_box对应v(a)，f对应v(B_f, a), s对应v(S, a)
         output = self.layer4(action_box, f, s, batch_num, action_num)
         return output
 
@@ -237,21 +248,27 @@ class DQN:
             self.all_box_list[pic_id] = all_box
         # self.c = np.zeros((1, self.box_num))
 
+    # 计算 Q 值函数
     def get_q_utils(self, all_box_in, state, batch_num, box_num, net_type):
         chosen_num_list = []
         for i in range(batch_num):
+
+            # 获得 action_box 和 chosen_box 下标，用于从 all_box 中筛选
             action_index = np.argwhere(state[i, :box_num[i]] == 0)[:, 0]
             chosen_index = np.argwhere(state[i, :box_num[i]] == 1)[:, 0]
 
+            # 获得 action_box 和 chosen_box 的数量
             action_num = np.shape(action_index)[0]
             chosen_num = np.shape(chosen_index)[0]
             chosen_num_list.append(chosen_num)
 
+            # 获得 action_box 矩阵，包括步骤获取 box，不够 64 的填充到64
             action_box_np = all_box_in[i:i+1, action_index, 0:4096]
             action_pos_np = all_box_in[i:i + 1, action_index, 4096:]
             action_box_np = np.pad(action_box_np, ((0, 0), (0, 64 - action_num), (0, 0)), 'constant')
             action_pos_np = np.pad(action_pos_np, ((0, 0), (0, 64 - action_num), (0, 0)), 'constant')
 
+            # 获得 all_box 矩阵，包括步骤获取，重复 action_num 次（用于和action_box拼接），如果 action 不够 64 次填充到 64
             all_box_np = all_box_in[i:i+1, :, 0:4096]
             all_pos_np = all_box_in[i:i+1, :, 4096:]
             all_box_np_three_a = np.repeat(all_box_np, action_num, axis=0)
@@ -259,6 +276,7 @@ class DQN:
             all_box_np_three_a = np.pad(all_box_np_three_a, ((0, 64 - action_num), (0, 0), (0, 0)), 'constant')
             all_pos_np_three_a = np.pad(all_pos_np_three_a, ((0, 64 - action_num), (0, 0), (0, 0)), 'constant')
 
+            # 获得 chosen_box 矩阵，包括步骤获取，不足33次填充到33，其余部分和上面相同
             chosen_box_np = all_box_in[i:i+1, chosen_index, 0:4096]
             chosen_pos_np = all_box_in[i:i+1, chosen_index, 4096:]
             chosen_box_np = np.pad(chosen_box_np, ((0, 0), (0, 34 - chosen_num), (0, 0)), 'constant')
@@ -268,6 +286,7 @@ class DQN:
             chosen_box_np_three_a = np.pad(chosen_box_np_three_a, ((0, 64 - action_num), (0, 0), (0, 0)), 'constant')
             chosen_pos_np_three_a = np.pad(chosen_pos_np_three_a, ((0, 64 - action_num), (0, 0), (0, 0)), 'constant')
 
+            # 获得 action_a_box 矩阵，包括步骤获取，不足64次填充到64，升维，每一个action_box重复box_num次，box_num不足64填充到64
             action_a_box_np = all_box_in[i, action_index, 0:4096]
             action_a_pos_np = all_box_in[i, action_index, 4096:]
             action_a_box_np = np.pad(action_a_box_np, ((0, 64 - action_num), (0, 0)), 'constant')
@@ -281,6 +300,7 @@ class DQN:
             action_a_pos_np_three_a = np.pad(action_a_pos_np_three_a, ((0, 0), (0, 64 - box_num[i]), (0, 0)),
                                              'constant')  # (0, 0), (0, max_box_num - box_nun), (0, 0)
 
+            # 获得 action_c_box 矩阵，包括步骤获取，不足64次填充到64，升维，每一个action_box重复chosen_num次，chosen_num不足64填充到64
             action_c_box_np = all_box_in[i, action_index, 0:4096]
             action_c_pos_np = all_box_in[i, action_index, 4096:]
             action_c_box_np = np.pad(action_c_box_np, ((0, 64 - action_num), (0, 0)), 'constant')
@@ -321,6 +341,8 @@ class DQN:
 
         # if batch_num > 1:
         #     logging.info('start_ten')
+
+        # 生成tensor
         if torch.cuda.is_available():
             all_box = torch.FloatTensor(all_box_np_three_b).cuda()
             all_box.requires_grad_()
@@ -367,6 +389,7 @@ class DQN:
         # if batch_num > 1:
         #     logging.info('start_net')
 
+        # 代入网络计算
         if net_type == 1:
             q = self.eval_net(all_box, all_pos, chosen_box, chosen_pos, action_box, action_pos, action_a_box, action_a_pos,
                      action_c_box, action_c_pos, box_num, 64, chosen_num_list, batch_num)
