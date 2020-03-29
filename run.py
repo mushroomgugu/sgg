@@ -21,18 +21,18 @@ import math
 Tensor = FloatTensor
 
 # 参数
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 LR = 0.001
 GAMMA = 0.90
 EPISILO = 0.9
-MEMORY_CAPACITY = 3400
+MEMORY_CAPACITY = 340
 Q_NETWORK_ITERATION = 100
 
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%m/%d/%Y %H:%M:%S %p"
 
-logging.basicConfig(filename='my4.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
+logging.basicConfig(filename='my5.log', level=logging.DEBUG, format=LOG_FORMAT, datefmt=DATE_FORMAT)
 
 # 层
 class MyLayer(nn.Module):
@@ -245,7 +245,7 @@ class DQN:
             for i in range(pic_id - num + 1):
                 self.all_box_list.append(0)
         if type(self.all_box_list[pic_id]) == int:
-            self.all_box_list[pic_id] = all_box
+            self.all_box_list[pic_id] = all_box.copy()
         # self.c = np.zeros((1, self.box_num))
 
     # 计算 Q 值函数
@@ -339,9 +339,6 @@ class DQN:
                 action_c_pos_np_three_b = np.vstack(
                     (action_c_pos_np_three_b, action_c_pos_np_three_a[np.newaxis, :, :, :]))
 
-        # if batch_num > 1:
-        #     logging.info('start_ten')
-
         # 生成tensor
         if torch.cuda.is_available():
             all_box = torch.FloatTensor(all_box_np_three_b).cuda()
@@ -386,9 +383,6 @@ class DQN:
             action_c_pos = torch.FloatTensor(action_c_pos_np_three_b)
             action_c_pos.requires_grad_()
 
-        # if batch_num > 1:
-        #     logging.info('start_net')
-
         # 代入网络计算
         if net_type == 1:
             q = self.eval_net(all_box, all_pos, chosen_box, chosen_pos, action_box, action_pos, action_a_box, action_a_pos,
@@ -399,24 +393,38 @@ class DQN:
 
         return q
 
-    def choose_action(self, c):
+    def choose_action(self, c, index):
         eps = 0.05 + (EPISILO - 0.05) * math.exp(-1. * self.learn_step_counter / 200)
+        num = len(index)
+        # print(num)
         if np.random.randn() <= eps:  # greedy policy
-            all_box = np.pad(self.all_box, ((0, 64 - self.box_num), (0, 0)), 'constant')
-            all_box = all_box[np.newaxis, :, :]
             box_num = []
-            box_num.append(self.box_num)
-            q = self.get_q_utils(all_box, c, 1, box_num, 1)
-            action_index = np.argwhere(c == 0)[:, 1]
-            action_num = np.shape(action_index)[0]
-            max_index = q[0, :action_num].argmax(dim=0)
-            action = action_index[max_index]
+            all_box = np.zeros((num, 64, 4100))
+            for i in range(num):
+                box = self.all_box_list[index[i]]
+                box_num_i = np.shape(box)[0]
+                all_box_i = np.pad(box, ((0, 64 - box_num_i), (0, 0)), 'constant')
+                all_box_i = all_box_i[np.newaxis, :, :]
+                box_num.append(box_num_i)
+                all_box[i, :, :] = all_box_i
+            q = self.get_q_utils(all_box, c, num, box_num, 1)
+            action = np.zeros((num, 1), dtype=int)
+            for i in range(num):
+                action_index = np.argwhere(c[i, :box_num[i]] == 0)[:, 0]
+                action_num = np.shape(action_index)[0]
+                max_index = q[i, :action_num].argmax(dim=0)
+                action[i, 0] = action_index[max_index]
 
         else:  # random policy
-            while True:
-                action = np.random.randint(0, self.box_num)
-                if c[0, action] == 0:
-                    break
+            action = np.zeros((num, 1), dtype=int)
+            for i in range(num):
+                box = self.all_box_list[index[i]]
+                box_num_i = np.shape(box)[0]
+                while True:
+                    action_i = np.random.randint(0, box_num_i)
+                    if c[i, action_i] == 0:
+                        break
+                action[i, 0] = action_i
         return action
 
     def choose_action_test(self, c):
@@ -432,16 +440,22 @@ class DQN:
         return action
 
     def store_transition(self, state, action, reward, next_state, pic_id):
-        pic_id_r = np.zeros((1, 1))
-        pic_id_r[0, 0] = pic_id
-        a_r = np.zeros((1, 2))
-        a_r[0, 0] = action
-        a_r[0, 1] = reward
-        transition = np.hstack((pic_id_r, state, a_r, next_state))
-        # print(pic_id_r.shape)
-        index = self.memory_counter % MEMORY_CAPACITY
-        self.memory[index, :] = transition
-        self.memory_counter += 1
+
+        index = np.argwhere(reward < 0)[:, 0]
+        state = state[index, :]
+        action = action[index, :]
+        reward = reward[index, :]
+        next_state = next_state[index, :]
+        pic_id = pic_id[index, :]
+
+        transition = np.hstack((pic_id, state, action, reward, next_state))
+
+        num = np.shape(transition)[0]
+        if num != 0:
+            # print(transition)
+            index = self.memory_counter % MEMORY_CAPACITY
+            self.memory[index:index + num, :] = transition
+            self.memory_counter += num
 
     def learn(self):
 
@@ -450,73 +464,75 @@ class DQN:
             self.target_net.load_state_dict(self.eval_net.state_dict())
 
         # print(self.memory)
-        sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
-        batch_memory = self.memory[sample_index, :]
-        batch_pic_id = batch_memory[:, 0:1]
-        batch_state = batch_memory[:, 1:65]
-        batch_action = batch_memory[:, 65:66]
-        batch_reward = batch_memory[:, 66:67]
-        batch_next_state = batch_memory[:, -64:]
-        self.learn_step_counter += 1
-
-        box_num_list = []
-        index = np.zeros((BATCH_SIZE, 2), dtype=int)
-        for i in range(BATCH_SIZE):
-            all_box_np = self.all_box_list[int(batch_pic_id[i, 0])]
-            box_num = np.shape(all_box_np)[0]
-            box_num_list.append(box_num)
-            all_box_np = np.pad(all_box_np, ((0, 64 - box_num), (0, 0)), 'constant')
-            all_box_np = all_box_np[np.newaxis, :, :]
-
-            # print(np.argwhere(batch_state[i] == 0))
-            action_index = np.argwhere(batch_state[i] == 0)[:, 0]
-            index[i, 0] = i
-            index[i, 1] = np.argwhere(action_index == batch_action[i, 0])
-
-            if i == 0:
-                all_box = all_box_np
+        if self.memory_counter > BATCH_SIZE:
+            if self.memory_counter < MEMORY_CAPACITY:
+                memory_num = self.memory_counter
             else:
-                all_box = np.vstack((all_box, all_box_np))
+                memory_num = MEMORY_CAPACITY
+            sample_index = np.random.choice(memory_num, BATCH_SIZE)
+            batch_memory = self.memory[sample_index, :]
+            batch_pic_id = batch_memory[:, 0:1]
+            batch_state = batch_memory[:, 1:65]
+            batch_action = batch_memory[:, 65:66]
+            batch_reward = batch_memory[:, 66:67]
+            batch_next_state = batch_memory[:, -64:]
+            self.learn_step_counter += 1
 
-        # logging.info('q_eval')
-        q_eval = self.get_q_utils(all_box, batch_state, BATCH_SIZE, box_num_list, 1)
-        # logging.info('finish_eval')
+            box_num_list = []
+            index = np.zeros((BATCH_SIZE, 2), dtype=int)
+            for i in range(BATCH_SIZE):
+                all_box_np = self.all_box_list[int(batch_pic_id[i, 0])]
+                box_num = np.shape(all_box_np)[0]
+                box_num_list.append(box_num)
+                all_box_np = np.pad(all_box_np, ((0, 64 - box_num), (0, 0)), 'constant')
+                all_box_np = all_box_np[np.newaxis, :, :]
 
-        q_eval_true = q_eval[index[:, 0], index[:, 1]]
+                # print(np.argwhere(batch_state[i] == 0))
+                action_index = np.argwhere(batch_state[i] == 0)[:, 0]
+                index[i, 0] = i
+                index[i, 1] = np.argwhere(action_index == batch_action[i, 0])
 
-        q_next = self.get_q_utils(all_box, batch_next_state, BATCH_SIZE, box_num_list, 2)
-        # print(q_next.shape)
-        for i in range(BATCH_SIZE):
-            # print(q_next[i, :box_num[i]].max(0))
-            q_next_max_i = q_next[i, :box_num_list[i]].max(0)[0].unsqueeze(0)
-            # print(q_next_max_i.shape)
-            if i == 0:
-                q_next_max = q_next_max_i
+                if i == 0:
+                    all_box = all_box_np
+                else:
+                    all_box = np.vstack((all_box, all_box_np))
+
+            q_eval = self.get_q_utils(all_box, batch_state, BATCH_SIZE, box_num_list, 1)
+            # logging.info('finish_eval')
+
+            q_eval_true = q_eval[index[:, 0], index[:, 1]]
+
+            q_next = self.get_q_utils(all_box, batch_next_state, BATCH_SIZE, box_num_list, 2)
+            # print(q_next.shape)
+            for i in range(BATCH_SIZE):
+                # print(q_next[i, :box_num[i]].max(0))
+                action_num = np.shape(np.argwhere(batch_next_state[i] == 0)[:, 0])[0] - (64 - box_num_list[i])
+                q_next_max_i = q_next[i, :action_num].max(0)[0].unsqueeze(0)
+                # pdb.set_trace()
+                # print(q_next_max_i.shape)
+                if i == 0:
+                    q_next_max = q_next_max_i
+                else:
+                    q_next_max = torch.cat((q_next_max, q_next_max_i), 0)
+
+            if torch.cuda.is_available():
+                batch_reward_ten = torch.FloatTensor(batch_reward).cuda()
             else:
-                q_next_max = torch.cat((q_next_max, q_next_max_i), 0)
+                batch_reward_ten = torch.FloatTensor(batch_reward)
 
-        if torch.cuda.is_available():
-            batch_reward_ten = torch.FloatTensor(batch_reward).cuda()
-        else:
-            batch_reward_ten = torch.FloatTensor(batch_reward)
-        # print(batch_reward_ten.shape)
-        q_target = batch_reward_ten.t().squeeze() + GAMMA*q_next_max
+            q_target = batch_reward_ten.t().squeeze() + GAMMA * q_next_max
 
-        # print(q_eval_true.shape)
-        # print(q_target.shape)
-        loss = self.loss_func(q_eval_true, q_target)
-        self.loss_arr.append(loss)
+            loss = self.loss_func(q_eval_true, q_target)
+            self.loss_arr.append(loss)
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        # params = list(self.eval_net.named_parameters())
-        # # print(params)
-        # for (name, param) in params:
-        #     print('name: ', name)
-        #     print('grad: ', param.grad)
-        self.optimizer.step()
-
-
+            self.optimizer.zero_grad()
+            loss.backward()
+            # params = list(self.eval_net.named_parameters())
+            # # print(params)
+            # for (name, param) in params:
+            #     print('name: ', name)
+            #     print('grad: ', param.grad)
+            self.optimizer.step()
 
     def get_q(self, state, action):
         all_box = np.pad(self.all_box, ((0, 64 - self.box_num), (0, 0)), 'constant')
@@ -548,29 +564,33 @@ class DQN:
         return finish
 
     def save_model(self):
-        torch.save(self.eval_net, 'eval_net4.pkl')
-        torch.save(self.target_net, 'target_net4.pkl')
+        torch.save(self.eval_net, 'eval_net5.pkl')
+        torch.save(self.target_net, 'target_net5.pkl')
 
 
 def get_score(c, c_true):
     up = 0.0
     down = 0.0
-    finish = True
-    for i in range(len(c_true)):
-        if c[0, i] == c_true[i] and c[0, i] == 1:
-            up += 1.0
-            down += 1.0
-        elif c_true[i] == 1:
-            down += 1.0
-            finish = False
-        elif c[0, i] == 1:
-            down += 1.0
-    if down == 0:
-        return 0, finish
-    else:
-        logging.info("up: " + str(up))
-        # logging.info("down: " + str(down))
-        return up/down, finish
+    num = len(c_true)
+    score = np.zeros((num, 1))
+    # print('c_true: ', c_true)
+    for j in range(num):
+        for i in range(len(c_true[j])):
+            if c[j, i] == c_true[j][i] and c[j, i] == 1:
+                up += 1.0
+                down += 1.0
+            elif c_true[j][i] == 1:
+                down += 1.0
+            elif c[j, i] == 1:
+                down += 1.0
+        if down == 0:
+            score[j, 0] = 0
+        else:
+            logging.info("up: " + str(up))
+            score[j, 0] = up/down
+        up = 0.0
+        down = 0.0
+    return score
 
 
 if __name__ == '__main__':
@@ -582,6 +602,16 @@ if __name__ == '__main__':
         file_list = os.listdir(root_dir)
         times = 0
         finish = False
+
+        file_dir = '/home/wby/wby/wby_outputs/train/sgdet_train/train_guildo_minnum_noconstraint.txt'
+        file = open(file_dir, mode='r')
+        add_true_box = []
+        for line in file:
+            words = line.split(' ')
+            score = float(words[2])
+            if score == 0.0:
+                box_id = int(words[1])
+                add_true_box.append(box_id)
 
         # 训练
         while True:
@@ -595,6 +625,9 @@ if __name__ == '__main__':
             # last_pic = 0
             eig_vec_all = []
             c_true = []
+            c_true_list = []
+            eig_vec_list = []
+            learn_pic_list = []
             step = 0
             true_num = 0
             pic_num = 0
@@ -604,6 +637,9 @@ if __name__ == '__main__':
                 box_id = int(words[1])
                 box_reward = float(words[2])
                 box_reward = int(box_reward)
+                if box_reward == 0:
+                    if box_id in add_true_box:
+                        box_reward = 1
                 label = int(words[3])
                 eig_vec = []
                 for i in range(5, 4101):
@@ -617,45 +653,24 @@ if __name__ == '__main__':
                     last_pic = pic_id
 
                 if last_pic != pic_id:
-                    if true_num >= 1:
+                    if true_num >= 11:
                         logging.info("true num: " + str(true_num))
                         pic_num += 1
                         num = len(eig_vec_all)
-                        c = np.zeros((1, 64))
                         eig_mat = np.array(eig_vec_all)
                         # print(eig_mat)
                         dqn.set_data(eig_mat, last_pic)
-                        last_score = 0
-                        for i in range(35 - 1):
-                            action = dqn.choose_action(c)
-                            # logging.info("aciton: " + str(action))
-                            c_last = c.copy()
-                            c[0, action] = 1
-                            if i != 35 - 2:
-                                # print(c)
-                                # print(c_true)
-                                score, finish = get_score(c, c_true)
-                                reward = last_score - score
-                                last_score = score
-                                # logging.info("reward: " + str(reward))
-                                logging.info("score: " + str(score))
-                            else:
-                                score, finish = get_score(c, c_true)
-                                reward = score
-                            dqn.store_transition(c_last, action, reward, c, last_pic)
-                        if times > 0:
-                            dqn.learn()
-                            finish = dqn.print_loss()
-                            dqn.save_model()
-                            if finish:
-                                break
+                        eig_vec_list.append(eig_mat)
+                        learn_pic_list.append(last_pic)
+                        c_true_list.append(c_true.copy())
+
                     eig_vec_all.clear()
                     c_true.clear()
                     true_num = 0
                     # print(last_pic)
                     logging.info("pic: " + str(last_pic))
                     logging.info("---------------------------")
-                    if pic_num >= 100:
+                    if pic_num >= 10:
                         break
                     eig_vec_all.append(eig_vec)
                     c_true.append(box_reward)
@@ -669,91 +684,130 @@ if __name__ == '__main__':
                     eig_vec_all.append(eig_vec)
                     c_true.append(box_reward)
             f.close()
+            learn_num = len(learn_pic_list)
+            get_list_times = math.ceil(learn_num/4)
+            for j in range(get_list_times):
+                num = 4
+                if j == get_list_times - 1:
+                    num = learn_num - j*4
+                last_score = np.zeros((num, 1), dtype=float)
+                c = np.zeros((num, 64), dtype=int)
+                index = learn_pic_list[j*4: j*4+num]
+                for i in range(35 - 1):
+                    action = dqn.choose_action(c, index)
+                    # pdb.set_trace()
+                    # print('action: ', action)
+                    # logging.info("aciton: " + str(action))
+                    c_last = c.copy()
+                    line_index = [0, 1, 2, 3]
+                    line_index = line_index[:num]
+                    c[line_index, action.transpose()] = 1
+                    if i != 35 - 2:
+                        # print(c)
+                        # print(c_true)
+                        score = get_score(c, c_true_list[j*4:j*4+num])
+                        reward = last_score - score
+                        last_score = score.copy()
+                        # logging.info("reward: " + str(reward))
+                        logging.info("score: " + str(score))
+                    else:
+                        score = get_score(c, c_true_list[j*4:j*4+num])
+                        reward = score
+                    pic_id = np.mat(index).transpose()
+                    # print('c_last; ', c_last, 'action: ', action, 'reward: ', reward, 'c: ', c, 'pic_id: ', pic_id)
+                    # pdb.set_trace()
+                    dqn.store_transition(c_last, action, reward, c, pic_id)
+                if times > 0:
+                    dqn.learn()
+                    finish = dqn.print_loss()
+                    dqn.save_model()
+                    if finish:
+                        break
             times += 1
-            if times >= 100:
+            if times >= 200:
                 break
         dqn.save_model()
 
         # 测试代码
-        times = 0
-        for file in file_list:
-            times += 1
-            path = root_dir + '/' + file
-            f = open(path, mode='r')
-            last_pic = -1
-            eig_vec_all = []
-            c_true = []
-            step = 0
-            reward_all = []
-            pic_num = 0
-            true_num = 0
-            for line in f:
-                words = line.split(' ')
-                pic_id = int(words[0])
-                box_id = int(words[1])
-                box_reward = float(words[2])
-                box_reward = int(box_reward)
-                label = int(words[3])
-                eig_vec = []
-                for i in range(5, 4101):
-                    num = float(words[i])
-                    eig_vec.append(num)
-                for i in range(-6, -2):
-                    x1 = float(words[i])
-                    eig_vec.append(x1)
-                if last_pic == -1:
-                    last_pic = pic_id
-                if last_pic < pic_id:
-                    if true_num >= 1:
-                        pic_num += 1
-                        num = len(eig_vec_all)
-                        c = np.zeros((1, num))
-                        eig_mat = np.array(eig_vec_all)
-                        dqn.set_data(eig_mat, last_pic)
-                        last_score = 0
-                        Q = np.zeros((1, 35), dtype=float)
-                        c_all = np.zeros((34, num))
-                        for i in range(35):
-                            action = dqn.choose_action_test(c)
-                            q = dqn.get_q(c, action)
-                            c_last = c
-                            c[0, action] = 1
-                            c_all[i + 1:i + 2, :] = c
-                            Q[0, i] = q
-                        s_max = - sys.float_info.max
-                        max_i = 0
-                        print(Q)
-                        for i in range(1, 35):
-                            s_i = Q[0, i] + (1 - GAMMA) * (np.sum(Q[:, i + 1:-1], axis=1)) - GAMMA * Q[:, -1]
-                            if s_i > s_max:
-                                max_i = i
-                                s_max = s_i
-                                print(s_max)
-
-                        c_max = c_all[max_i:max_i + 1, :]
-                        print(c_max)
-                        print(c_true)
-                        reward = get_score(c_max, c_true)
-                        reward_all.append(reward)
-                        print(reward)
-                        logging.info("reward: " + str(reward))
-                    eig_vec_all.clear()
-                    c_true.clear()
-                    true_num = 0
-                    if box_reward == 1:
-                        true_num += 1
-                    if pic_num >= 10:
-                        break
-                    eig_vec_all.append(eig_vec)
-                    c_true.append(box_reward)
-                    last_pic = pic_id
-
-                else:
-                    if box_reward == 1:
-                        true_num += 1
-                    eig_vec_all.append(eig_vec)
-                    c_true.append(box_reward)
-            f.close()
+        # times = 0
+        # for file in file_list:
+        #     times += 1
+        #     path = root_dir + '/' + file
+        #     f = open(path, mode='r')
+        #     last_pic = -1
+        #     eig_vec_all = []
+        #     c_true = []
+        #     step = 0
+        #     reward_all = []
+        #     pic_num = 0
+        #     true_num = 0
+        #     for line in f:
+        #         words = line.split(' ')
+        #         pic_id = int(words[0])
+        #         box_id = int(words[1])
+        #         box_reward = float(words[2])
+        #         box_reward = int(box_reward)
+        #         label = int(words[3])
+        #         eig_vec = []
+        #         for i in range(5, 4101):
+        #             num = float(words[i])
+        #             eig_vec.append(num)
+        #         for i in range(-6, -2):
+        #             x1 = float(words[i])
+        #             eig_vec.append(x1)
+        #         if last_pic == -1:
+        #             last_pic = pic_id
+        #         if last_pic < pic_id:
+        #             if true_num >= 1:
+        #                 pic_num += 1
+        #                 num = len(eig_vec_all)
+        #                 c = np.zeros((1, num))
+        #                 eig_mat = np.array(eig_vec_all)
+        #                 dqn.set_data(eig_mat, last_pic)
+        #                 last_score = 0
+        #                 Q = np.zeros((1, 35), dtype=float)
+        #                 c_all = np.zeros((34, num))
+        #                 for i in range(35):
+        #                     action = dqn.choose_action_test(c)
+        #                     q = dqn.get_q(c, action)
+        #                     c_last = c
+        #                     c[0, action] = 1
+        #                     c_all[i + 1:i + 2, :] = c
+        #                     Q[0, i] = q
+        #                 s_max = - sys.float_info.max
+        #                 max_i = 0
+        #                 print(Q)
+        #                 for i in range(1, 35):
+        #                     s_i = Q[0, i] + (1 - GAMMA) * (np.sum(Q[:, i + 1:-1], axis=1)) - GAMMA * Q[:, -1]
+        #                     if s_i > s_max:
+        #                         max_i = i
+        #                         s_max = s_i
+        #                         print(s_max)
+        #
+        #                 c_max = c_all[max_i:max_i + 1, :]
+        #                 print(c_max)
+        #                 print(c_true)
+        #                 reward = get_score(c_max, c_true)
+        #                 reward_all.append(reward)
+        #                 print(reward)
+        #                 logging.info("reward: " + str(reward))
+        #             eig_vec_all.clear()
+        #             c_true.clear()
+        #             true_num = 0
+        #             if box_reward == 1:
+        #                 true_num += 1
+        #             if pic_num >= 10:
+        #                 break
+        #             eig_vec_all.append(eig_vec)
+        #             c_true.append(box_reward)
+        #             last_pic = pic_id
+        #
+        #         else:
+        #             if box_reward == 1:
+        #                 true_num += 1
+        #             eig_vec_all.append(eig_vec)
+        #             c_true.append(box_reward)
+        #     f.close()
     except Exception as e:
         log = logging.getLogger("log error")
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
