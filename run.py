@@ -18,6 +18,7 @@ import traceback
 import os
 import random
 import math
+import pdb
 Tensor = FloatTensor
 
 # 参数
@@ -236,9 +237,10 @@ class DQN:
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
         self.loss_func = nn.SmoothL1Loss()
 
+    # 存储all_box数据
     def set_data(self, all_box, pic_id):
-        self.box_num = np.shape(all_box)[0]
-        self.all_box = all_box
+
+        # 将所有图片的所有box记录在self.all_box_list的list中，其中index是pic_id
         num = len(self.all_box_list)
         # print(num)
         if pic_id > num-1:
@@ -398,7 +400,9 @@ class DQN:
         num = len(index)
         # print(num)
         if np.random.randn() <= eps:  # greedy policy
-            box_num = []
+            box_num = []  # 记录box的数量
+
+            # 获得产生序列的图片的所有box
             all_box = np.zeros((num, 64, 4100))
             for i in range(num):
                 box = self.all_box_list[index[i]]
@@ -407,11 +411,18 @@ class DQN:
                 all_box_i = all_box_i[np.newaxis, :, :]
                 box_num.append(box_num_i)
                 all_box[i, :, :] = all_box_i
+
+            # 获得产生序列的图片的q值
             q = self.get_q_utils(all_box, c, num, box_num, 1)
+
+            # 记录添加的box所在的index（对于所有box的index）
             action = np.zeros((num, 1), dtype=int)
             for i in range(num):
+
+                # 获得未选择的box对于所有的box的index
                 action_index = np.argwhere(c[i, :box_num[i]] == 0)[:, 0]
                 action_num = np.shape(action_index)[0]
+                # 获得使得q值最大的box对于所有未选择的box的index
                 max_index = q[i, :action_num].argmax(dim=0)
                 action[i, 0] = action_index[max_index]
 
@@ -427,6 +438,7 @@ class DQN:
                 action[i, 0] = action_i
         return action
 
+    # 用于测试步骤计算q值的函数，目前未使用
     def choose_action_test(self, c):
         all_box = np.pad(self.all_box, ((0, 64 - self.box_num), (0, 0)), 'constant')
         all_box = all_box[np.newaxis, :, :]
@@ -439,9 +451,14 @@ class DQN:
         action = action_index[max_index]
         return action
 
+    # 存储有效记录，无效记录将不会被存储
     def store_transition(self, state, action, reward, next_state, pic_id):
 
+        # 有效记录：本次选择的box是正确的box
+        # 获得有效记录的index
         index = np.argwhere(reward < 0)[:, 0]
+
+        # 筛选有效记录
         state = state[index, :]
         action = action[index, :]
         reward = reward[index, :]
@@ -465,10 +482,14 @@ class DQN:
 
         # print(self.memory)
         if self.memory_counter > BATCH_SIZE:
+
+            # 当存储的memory未满，防止选择错误的记录
             if self.memory_counter < MEMORY_CAPACITY:
                 memory_num = self.memory_counter
             else:
                 memory_num = MEMORY_CAPACITY
+
+            # 获取抽取的记录的各个矩阵
             sample_index = np.random.choice(memory_num, BATCH_SIZE)
             batch_memory = self.memory[sample_index, :]
             batch_pic_id = batch_memory[:, 0:1]
@@ -478,8 +499,10 @@ class DQN:
             batch_next_state = batch_memory[:, -64:]
             self.learn_step_counter += 1
 
-            box_num_list = []
-            index = np.zeros((BATCH_SIZE, 2), dtype=int)
+            box_num_list = []  # 记录抽取的记录所在的图片的box的数量
+
+            # 获得抽取的记录所在的图片all_box
+            index = np.zeros((BATCH_SIZE, 2), dtype=int)  # 记录抽取的记录选取的box对于未选取的box的index
             for i in range(BATCH_SIZE):
                 all_box_np = self.all_box_list[int(batch_pic_id[i, 0])]
                 box_num = np.shape(all_box_np)[0]
@@ -500,28 +523,34 @@ class DQN:
             q_eval = self.get_q_utils(all_box, batch_state, BATCH_SIZE, box_num_list, 1)
             # logging.info('finish_eval')
 
+            # 获得抽取的记录（匹配选择的Box）的q值
             q_eval_true = q_eval[index[:, 0], index[:, 1]]
 
+            # 获得抽取的记录的下一步的q值
             q_next = self.get_q_utils(all_box, batch_next_state, BATCH_SIZE, box_num_list, 2)
-            # print(q_next.shape)
+
+            # 获取抽取的记录的下一步的最大q值
             for i in range(BATCH_SIZE):
-                # print(q_next[i, :box_num[i]].max(0))
+
+                # 获得抽取记录的下一个状态中未选择box的真实数量
                 action_num = np.shape(np.argwhere(batch_next_state[i] == 0)[:, 0])[0] - (64 - box_num_list[i])
+                # 获得抽取记录的下一个状态的真实最大q值
                 q_next_max_i = q_next[i, :action_num].max(0)[0].unsqueeze(0)
-                # pdb.set_trace()
-                # print(q_next_max_i.shape)
                 if i == 0:
                     q_next_max = q_next_max_i
                 else:
                     q_next_max = torch.cat((q_next_max, q_next_max_i), 0)
 
+            # 将reward转成tensor
             if torch.cuda.is_available():
                 batch_reward_ten = torch.FloatTensor(batch_reward).cuda()
             else:
                 batch_reward_ten = torch.FloatTensor(batch_reward)
 
+            # 获得q_target
             q_target = batch_reward_ten.t().squeeze() + GAMMA * q_next_max
 
+            # 计算loss及梯度下降
             loss = self.loss_func(q_eval_true, q_target)
             self.loss_arr.append(loss)
 
