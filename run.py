@@ -19,15 +19,19 @@ import os
 import random
 import math
 import pdb
+from operator import itemgetter
 Tensor = FloatTensor
 
 # 参数
 BATCH_SIZE = 2
+SEQ_SIZE = 2
 LR = 0.001
 GAMMA = 0.90
 EPISILO = 0.9
 MEMORY_CAPACITY = 340
+TRUE_MEMORY_CAPACITY = 340
 Q_NETWORK_ITERATION = 100
+EPISILO_2 = 0.9
 
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -222,12 +226,16 @@ class DQN:
         self.learn_step_counter = 0
         self.memory_counter = 0
         self.box_num = 1
+        self.true_memory_counter = 0
 
         # self.store_num = 0
         # self.all_box_arr = []
         self.all_box_list = []
 
         self.memory = np.zeros((MEMORY_CAPACITY, 64 * 2 + 3))
+
+        # 真实序列的memory
+        self.true_memory = np.zeros((TRUE_MEMORY_CAPACITY, 64 * 2 + 3))
 
         self.loss_arr = []
         # self.grad_arr = []
@@ -438,7 +446,7 @@ class DQN:
                 action[i, 0] = action_i
         return action
 
-    # 用于测试步骤计算q值的函数，目前未使用
+    # 用于测试步骤选择box的函数，目前未使用
     def choose_action_test(self, c):
         all_box = np.pad(self.all_box, ((0, 64 - self.box_num), (0, 0)), 'constant')
         all_box = all_box[np.newaxis, :, :]
@@ -456,14 +464,14 @@ class DQN:
 
         # 有效记录：本次选择的box是正确的box
         # 获得有效记录的index
-        index = np.argwhere(reward < 0)[:, 0]
-
-        # 筛选有效记录
-        state = state[index, :]
-        action = action[index, :]
-        reward = reward[index, :]
-        next_state = next_state[index, :]
-        pic_id = pic_id[index, :]
+        # index = np.argwhere(reward < 0)[:, 0]
+        #
+        # # 筛选有效记录
+        # state = state[index, :]
+        # action = action[index, :]
+        # reward = reward[index, :]
+        # next_state = next_state[index, :]
+        # pic_id = pic_id[index, :]
 
         transition = np.hstack((pic_id, state, action, reward, next_state))
 
@@ -474,6 +482,7 @@ class DQN:
             self.memory[index:index + num, :] = transition
             self.memory_counter += num
 
+    # 训练函数
     def learn(self):
 
         # update the parameters
@@ -563,6 +572,7 @@ class DQN:
             #     print('grad: ', param.grad)
             self.optimizer.step()
 
+    # 用于测试步骤计算q值，目前未使用
     def get_q(self, state, action):
         all_box = np.pad(self.all_box, ((0, 64 - self.box_num), (0, 0)), 'constant')
         all_box = all_box[np.newaxis, :, :]
@@ -573,7 +583,35 @@ class DQN:
         index = np.argwhere(action_index == action)[:, 0][0]
         return q[0, index]
 
+    # 产生某图片的正确序列
+    # 输入：
+    # p_list：记录box概率的list，格式：[(box_index, p)]，其中box_index是box在该图片中的序号
+    # pic_id_in：记录输入的图片的id
+    def get_true_memory(self, p_list, pic_id_in):
+        # 根据概率排序
+        p_list.sort(key=itemgetter(1), reverse=True)
+        next_state = np.zeros((1, 64))
+        state = np.zeros((1, 64))
+        # 正确box数量
+        num = len(p_list)
+        last_s = 0
+        for i in range(num):
+            item = p_list[i]
+            state = next_state.copy()
+            next_state[0, item[0]] = 1
+            action = np.mat([[item[0]]], dtype=float)
+            s = (i + 1) / num
+            r = last_s - s
+            last_s = s
+            reward = np.mat([[r]], dtype=float)
+            pic_id = np.mat([[pic_id_in]], dtype=float)
+            transition = np.hstack((pic_id, state, action, reward, next_state))
+            self.true_memory[self.true_memory_counter, :] = transition
+            self.true_memory_counter += 1
 
+    # 真实序列记录的是目前正在训练的图片的真实序列，因此更换图片就覆盖掉
+    def clear_true_memory(self):
+        self.true_memory_counter = 0
 
     def print_loss(self):
         # print(self.loss_arr)
@@ -657,9 +695,12 @@ if __name__ == '__main__':
             c_true_list = []
             eig_vec_list = []
             learn_pic_list = []
+            p_list_pic = []
             step = 0
             true_num = 0
             pic_num = 0
+            index = 0
+            dqn.clear_true_memory()
             for line in f:
                 words = line.split(' ')
                 pic_id = int(words[0])
@@ -670,6 +711,7 @@ if __name__ == '__main__':
                     if box_id in add_true_box:
                         box_reward = 1
                 label = int(words[3])
+                p = float(words[4])
                 eig_vec = []
                 for i in range(5, 4101):
                     num = float(words[i])
@@ -689,12 +731,14 @@ if __name__ == '__main__':
                         eig_mat = np.array(eig_vec_all)
                         # print(eig_mat)
                         dqn.set_data(eig_mat, last_pic)
+                        dqn.get_true_memory(p_list_pic, last_pic)
                         eig_vec_list.append(eig_mat)
                         learn_pic_list.append(last_pic)
                         c_true_list.append(c_true.copy())
 
                     eig_vec_all.clear()
                     c_true.clear()
+                    p_list_pic.clear()
                     true_num = 0
                     # print(last_pic)
                     logging.info("pic: " + str(last_pic))
@@ -706,12 +750,16 @@ if __name__ == '__main__':
                     last_pic = pic_id
                     if box_reward == 1:
                         true_num += 1
+                        p_list_pic.append((index, p))
+                    index += 1
                 else:
                     # times += 1
                     if box_reward == 1:
                         true_num += 1
+                        p_list_pic.append((index, p))
                     eig_vec_all.append(eig_vec)
                     c_true.append(box_reward)
+                    index += 1
             f.close()
             learn_num = len(learn_pic_list)
             get_list_times = math.ceil(learn_num/4)
